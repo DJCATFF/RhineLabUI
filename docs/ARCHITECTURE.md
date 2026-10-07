@@ -45,7 +45,7 @@ Docker Compose 用于本地开发基础设施。首次运行还需安装 API 依
 | --- | --- | --- | --- |
 | Web 前端 | Vite 7 + TypeScript 5.9 + Three.js 0.183 | `npm run dev` | 3D 档案阵列 / 360° Viewer / 文档工作台 |
 | API 服务 | NestJS（Node 24） | `npm run start:dev`（apps/api） | REST API / 鉴权 / 业务编排 |
-| Worker | Node 24 + BullMQ（含 LibreOffice） | Docker image | 文档转换、OCR、索引等异步任务 |
+| Worker | Node 24 + BullMQ；当前纯文本抽取，不含 LibreOffice | 开发：`npm --prefix apps/api run start:worker`；Docker 发行待实现 | 已实现 Tika 文本抽取；转换、OCR、索引为后续工作 |
 | 数据库 | PostgreSQL 16 + pgvector | Docker | 业务数据 + 全文搜索 + 向量检索 |
 | 队列 | Redis 7 | Docker | BullMQ 任务队列 |
 | 对象存储 | MinIO | Docker | 原始文件 / 生成的 PDF / 缩略图 |

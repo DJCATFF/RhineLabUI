@@ -4,7 +4,7 @@
 
 当前开发分支为 `feature/backend`，`develop` 从原版基线创建。APEX 尚未合并正式网站 `main`，不直接推送主分支。
 
-2026-09-19 已完成四项真实服务、数据库迁移、完整上传入队和 Redis 故障恢复验证。用户选择将代码同步到 DJCATFF 的 Fork；原 LBEILC 仓库仅作为上游。当前本机 Git 登录尚未完成，不能把本地提交说成已经同步远程。
+2026-09-19 已完成四项真实服务、数据库迁移、完整上传入队和 Redis 故障恢复验证。2026-10-07 已通过授权的 GitHub 连接器同步 DJCATFF/RhineLabUI 的 feature/backend；原 LBEILC 仓库仅作为上游。本机 Git 与连接器是独立授权渠道。文本抽取 Worker 的后续状态以 BACKEND-STATUS.md 为准。
 
 ## 继续开发前
 
@@ -16,7 +16,7 @@
 
 ## 下一项业务工作
 
-增加 Worker 消费 `extract-text`，读取 MinIO 原件、调用 Tika、保存文本及处理结果。覆盖失败重试、重复投递和进程重启。随后再设计鉴权、分页、检索与前端接入。
+已增加 Worker 消费 `extract-text`，读取 MinIO 原件、调用 Tika、保存文本及处理结果，支持自动重试与重复任务跳过。下一步设计手动重试、鉴权、分页、检索与前端接入。运行命令与实际验证范围见 BACKEND-STATUS.md。
 
 ## 约束
 

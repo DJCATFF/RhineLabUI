@@ -17,6 +17,10 @@ model Document {
   sha256    String
   status    String   @default("uploaded")
   queuedAt  DateTime?
+  text      String?  @db.Text
+  extractionError String?
+  extractionAttempts Int @default(0)
+  extractedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

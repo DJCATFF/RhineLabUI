@@ -292,3 +292,10 @@ WE 画质下拉增加「自定义」，仅此选择且超级模式关闭时显�
 
 - 四项镜像已下载并全部 healthy；数据库迁移、pgvector 扩展、完整上传/存储/入队及 Redis 停机后自动补投均已实际验证通过。新增 verify:recovery 仅用于本地，会短暂停止并恢复 Redis；运行前须全部依赖健康。
 - 用户明确选择同步到 DJCATFF 的 Fork（没有则创建），LBEILC/RhineLabUI 仅作上游，不向其推送本次 APEX 功能。Fork 创建与同步仍需完成本机登录；后续进度以 docs/BACKEND-STATUS.md 为准。
+
+### APEX 文本抽取（2026-10-07）
+
+- 用户补充 GitHub 应用授权，上传阶段已同步至 DJCATFF/RhineLabUI 的 feature/backend；本地原提交保留于 codex/backend-local-before-fork-sync。后续 APEX 提交继续同步该 Fork 分支，不触及正式 main。
+- 已增加独立 Node/BullMQ Worker（apps/api，start:worker），读取 MinIO、核验原件、调用 Tika 并保存正文及处理状态。开发 Worker 与 API 分开运行；Worker Docker 发行、OCR、预览转换和索引仍未实现。
+- 数据库采用追加迁移，不重置；列表不返回正文，GET /api/documents/:id 读取正文。完整运行、状态语义和验证范围见 docs/BACKEND-STATUS.md。
+- verify:extraction 自行启动测试 Worker，注入失败和进程中断，只清理自己的测试数据。运行前停止其他 Worker，确保没有待处理任务；原 verify / verify:recovery 也要求 Worker 停止以避免清理竞争。

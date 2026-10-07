@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   Logger,
+  NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
   ServiceUnavailableException,
@@ -24,8 +25,15 @@ export class DocumentsService implements OnModuleInit, OnModuleDestroy {
   findAll() {
     return this.prisma.document.findMany({
       take: 100,
+      omit: { text: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
+  }
+
+  async findOne(id: string) {
+    const document = await this.prisma.document.findUnique({ where: { id } });
+    if (!document) throw new NotFoundException('Document not found.');
+    return document;
   }
 
   async upload(file?: Express.Multer.File) {
@@ -82,7 +90,8 @@ export class DocumentsService implements OnModuleInit, OnModuleDestroy {
     this.dispatching = true;
     try {
       const pending = await this.prisma.document.findMany({
-        where: { queuedAt: null, status: 'uploaded' },
+        where: { queuedAt: null },
+        omit: { text: true },
         take: 100,
         orderBy: { createdAt: 'asc' },
       });
