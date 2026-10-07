@@ -8,6 +8,10 @@
     "postinstall": "node scripts/patch-rolling-number.mjs",
     "predev": "node scripts/patch-rolling-number.mjs && node scripts/export-records.mjs",
     "dev": "vite --host 127.0.0.1",
+    "dev:api": "npm --prefix apps/api run start:dev",
+    "infra:up": "docker compose up -d",
+    "infra:status": "docker compose ps --all",
+    "check:api": "npm --prefix apps/api test",
     "prebuild": "node scripts/patch-rolling-number.mjs && node scripts/export-records.mjs && node scripts/prepare-webfonts.mjs",
     "check:content": "node --experimental-strip-types --test scripts/check-content.mjs",
     "check:viewport": "node --experimental-strip-types scripts/check-viewport.mjs",
@@ -28,6 +32,8 @@
     "prettier": "^3.9.6",
     "typescript": "^5.9.3",
     "vite": "^7.3.1"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }
-

@@ -1,0 +1,17 @@
+{
+  "recommendations": [
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "EditorConfig.EditorConfig",
+    "eamodio.gitlens",
+    "ms-azuretools.vscode-containers",
+    "Prisma.prisma",
+    "humao.rest-client",
+    "christian-kohler.path-intellisense",
+    "christian-kohler.npm-intellisense",
+    "mtxr.sqltools",
+    "mtxr.sqltools-driver-pg",
+    "usernamehw.errorlens",
+    "gruntfuggly.todo-tree"
+  ]
+}

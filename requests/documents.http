@@ -1,0 +1,24 @@
+@baseUrl = http://127.0.0.1:3000/api
+
+### All four dependencies must be available
+GET {{baseUrl}}/health
+
+### Most recent 100 documents
+GET {{baseUrl}}/documents
+
+### Upload a document (20 MiB maximum)
+POST {{baseUrl}}/documents
+Content-Type: multipart/form-data; boundary=apex-boundary
+
+--apex-boundary
+Content-Disposition: form-data; name="file"; filename="sample.txt"
+Content-Type: text/plain
+
+APEX document upload verification.
+--apex-boundary--
+
+### Missing file must return 400
+POST {{baseUrl}}/documents
+Content-Type: multipart/form-data; boundary=apex-empty
+
+--apex-empty--

@@ -4,6 +4,8 @@
 
 **[在线体验 → rhine.lubeiluchen.cc](https://rhine.lubeiluchen.cc/)**
 
+APEX 文档管理后端正在独立开发分支中推进，原网页仍可单独运行。后端当前进度、启动步骤与验证限制见 [APEX 后端状态](docs/BACKEND-STATUS.md)。
+
 iPhone 可用 Safari 打开在线版，通过“分享 → 添加到主屏幕”安装；从主屏幕图标进入可使用独立窗口。首次联网后，设置中显示“离线资源已就绪”即可离线浏览档案和模型。支持桌面不同比例、手机横竖屏和触摸操作。[安装与更新说明](docs/PWA.md)
 
 ![莱茵生命终端：由透明档案盒构成的三维阵列](docs/media/archive.jpg)

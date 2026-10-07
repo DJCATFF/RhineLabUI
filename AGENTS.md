@@ -267,3 +267,28 @@ WE 画质下拉增加「自定义」，仅此选择且超级模式关闭时显�
 用户明确授权评估兼容性后更新 main，覆盖此前不合并主分支的实验限制。共用暗色主题、自适应阵列、开场铺屏、滚动数字修复与资源管理进入网页；超级性能模式适配为网页持久化设置，默认关闭，独立于减少动态效果。工作台、系统音频／媒体、HUD 属性、自定义图片与 3D 卸载入口仍仅在 wallpaper 构建启用。普通网页保留启动声音解锁、键盘与触摸、PWA 和自定义画质。继续沿用原生实现流程。验证见 verification/WEB-INTEGRATION.md。
 
 - 2026-09-11：用户要求开启 HUD 时开场同样应用曲面与鼠标追踪，覆盖此前开场无 UI 视差的限制。Logo、验证文字、圆环和欢迎画面按当帧原始动作叠加投影，品牌与 Powered 共用同一曲面；切换阶段保留深度与指针跟随状态。磨砂底仍仅交互阶段启用。见 verification/BOOT-HUD.md。
+
+## APEX 文档/知识管理系统（2026-09-18）
+
+- 用户授权在本仓库基础上演进 APEX 文档/知识管理系统：NestJS 后端 + PostgreSQL/pgvector + Redis + MinIO + Tika，全部基础设施 Docker 化，Windows 主机不散装任何服务。
+- 架构唯一事实来源：`docs/ARCHITECTURE.md`；环境搭建指南：`docs/ENVIRONMENT-SETUP.md`。端口规划（5173/3000/5432/6379/9000/9001/9998）不得擅自更改。
+- 原版基线 tag：`rhinelab-original-baseline`。任何 APEX 改动不得破坏原版前端流程（开场 → 3D 档案阵列 → ACCESS FILE → 解密 → 360° Viewer）。
+- 后端骨架位于 `apps/api`（NestJS 11 + Prisma + Swagger，全局前缀 /api，Swagger 挂 /api/docs）。新代码遵守 ESLint/Prettier；**不得对既有 Three.js 前端做大规模格式化或重构**，旧代码逐步迁移。
+- **不要第一天就迁 Monorepo**（`apps/web` 等结构调整留到后续明确授权后再做）。
+- 分支模型：main / develop / feature/*，不直接往 main 写。
+- 环境变量：`.env` 永不提交；新增变量必须同步更新 `.env.example`。
+- CLI 不全局安装，统一 `npx` / `npm run`。
+- 2026-09-18 环境状态：WSL2 已启用（wsl --install + 重启），Docker Desktop 29.8.0 引擎已验证可运行。Docker 虚拟磁盘通过目录联接存放在 D 盘：`C:\Users\air_6\AppData\Local\Docker\wsl` → `D:\DockerDesktop\data\wsl`（settings-store.json 的 DataFolder 键对该版本无效，已移除，勿再依赖）。Docker Hub 直连不通，`~/.docker/daemon.json` 已配置 registry-mirrors（docker.m.daocloud.io 等），拉镜像走加速器。
+- 尚未验证项（交接时为 Codex 的第一任务）：`docker compose up -d` 拉起 PostgreSQL/Redis/MinIO/Tika、`prisma migrate dev`、`GET /api/health`。
+
+### APEX 后端推进（2026-09-18，覆盖上述初始交接状态）
+
+- 已从原版基线建立 `develop` 和 `feature/backend`；后端工作保留在 feature/backend，不合并正式 main。
+- 已实现原件上传、MinIO 私有存储、Prisma 元数据、持久化待投递记录及 BullMQ 入队、依赖健康检查。Worker 尚未实现，uploaded/queuedAt 不代表已抽取文本。
+- Prisma 命令通过 apps/api/scripts/prisma.mjs 读取根目录 .env；已有环境用 prisma:deploy 应用迁移，不重置数据库。API 和容器端口只绑定本机。
+- Docker 失效 socket 已通过备份两个临时目录恢复；Docker Desktop 版本为日志所示 4.91.0，29.8.0 是 CLI/Engine 版本。MinIO 已启动，其他镜像下载受 EOF 网络错误阻碍。实际验证与后续步骤见 docs/BACKEND-STATUS.md。
+
+### APEX 实际联调与 Fork（2026-09-19）
+
+- 四项镜像已下载并全部 healthy；数据库迁移、pgvector 扩展、完整上传/存储/入队及 Redis 停机后自动补投均已实际验证通过。新增 verify:recovery 仅用于本地，会短暂停止并恢复 Redis；运行前须全部依赖健康。
+- 用户明确选择同步到 DJCATFF 的 Fork（没有则创建），LBEILC/RhineLabUI 仅作上游，不向其推送本次 APEX 功能。Fork 创建与同步仍需完成本机登录；后续进度以 docs/BACKEND-STATUS.md 为准。

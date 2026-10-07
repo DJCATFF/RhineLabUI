@@ -1,0 +1,25 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  title     String
+  fileName  String
+  mimeType  String
+  size      Int
+  objectKey String   @unique
+  sha256    String
+  status    String   @default("uploaded")
+  queuedAt  DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("documents")
+  @@index([queuedAt, createdAt])
+}

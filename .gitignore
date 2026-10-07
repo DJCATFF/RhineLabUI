@@ -26,3 +26,11 @@ reference/local-files-connection.js
 public/fonts/novecento/
 .vercel/
 .wrangler/
+
+# APEX backend (per docs/ARCHITECTURE.md)
+uploads/
+storage/
+coverage/
+.vscode/*.local.json
+.DS_Store
+Thumbs.db

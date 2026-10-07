@@ -1,0 +1,58 @@
+{
+  "name": "apex-api",
+  "version": "0.0.1",
+  "description": "APEX NestJS API",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "nest build",
+    "lint": "eslint src",
+    "start": "node dist/main.js",
+    "start:dev": "nest start --watch",
+    "start:debug": "nest start --debug --watch",
+    "prisma:generate": "node scripts/prisma.mjs generate",
+    "prisma:migrate": "node scripts/prisma.mjs migrate dev",
+    "prisma:deploy": "node scripts/prisma.mjs migrate deploy",
+    "test": "npm run build && node --test test/*.test.cjs",
+    "verify": "node scripts/verify.mjs",
+    "verify:storage": "node scripts/verify-storage.mjs",
+    "verify:recovery": "node scripts/verify-recovery.mjs"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.2",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@nestjs/swagger": "^11.2.0",
+    "@prisma/client": "^6.14.0",
+    "bullmq": "6.3.6",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.2",
+    "dotenv": "18.0.0",
+    "ioredis": "6.0.0",
+    "minio": "8.0.7",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.10",
+    "@types/express": "^5.0.3",
+    "@types/multer": "2.2.0",
+    "@types/node": "^24.3.0",
+    "eslint": "10.10.0",
+    "globals": "17.12.0",
+    "prisma": "^6.14.0",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "8.70.0"
+  },
+  "allowScripts": {
+    "@prisma/client@6.19.3": true,
+    "prisma@6.19.3": true,
+    "@prisma/engines@6.19.3": true
+  },
+  "overrides": {
+    "multer": "2.3.0"
+  }
+}
