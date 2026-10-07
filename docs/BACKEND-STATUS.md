@@ -1,8 +1,9 @@
 # APEX 后端第一阶段
 
-更新时间：2026-09-22。开发分支：`feature/backend`，从 `develop` / 原版基线 `17a1611` 开始。此阶段不合并正式网站 main，不迁移前端目录。用户已选择同步到 DJCATFF 自己的 Fork。
+更新时间：2026-10-07。开发分支：`feature/backend`，从 `develop` / 原版基线 `17a1611` 开始。此阶段不合并正式网站 main，不迁移前端目录。用户已选择同步到 DJCATFF 自己的 Fork。
 
-Fork 已创建：https://github.com/DJCATFF/RhineLabUI 。本地 `origin` 指向该 Fork，`upstream` 保留 `LBEILC/RhineLabUI`。后端实现和真实联调记录已保存在本地提交 `8590019`、`8eb33d9`，尚未推送：浏览器登录不等于本机 Git 登录，现有 GitHub 连接写入新 Fork 返回 403。2026-09-22 重试推送仍缺少 Git 凭据；Git Credential Manager 设备登录未返回授权码，已停止等待；连接器重试写入仍返回 `Resource not accessible by integration`。等待用户为 GitHub 应用补充该 Fork 的仓库访问权限，或完成本机 Git 登录。不得把 Fork 已创建记为后端已同步。
+Fork：https://github.com/DJCATFF/RhineLabUI 。本地 `origin` 指向该 Fork，`upstream` 保留 `LBEILC/RhineLabUI`。2026-10-07 用户补充授权后，通过 GitHub 连接器成功同步至 `feature/backend`，同步提交 `6cf95c8` 的完整文件树与本地 `7963044` 一致（46 个变更文件）。本地原始实现及验证提交 `8590019`、`8eb33d9`、`7963044` 保留于备份分支 `codex/backend-local-before-fork-sync`；连接器同步产生新的提交编号。正式 main 和上游未修改。
+
 
 ## 已实现
 
