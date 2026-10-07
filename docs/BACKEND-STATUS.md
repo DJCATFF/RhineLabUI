@@ -17,7 +17,7 @@ Fork：https://github.com/DJCATFF/RhineLabUI 。本地 `origin` 指向该 Fork�
 - `GET /api/documents` 返回最近 100 条真实数据库记录；尚未实现完整分页。
 - Redis 启用 AOF 与 noeviction；Compose 服务端口只绑定本机。
 
-`status: uploaded` 表示原件和元数据保存成功。`queuedAt` 非空仅代表任务入队。2026-10-07 增加独立文本抽取 Worker，详见下节。OCR、PDF 转换、鉴权和前端接入尚未完成。队列任务保留以支持去重；任务定期清理及 Redis 数据卷丢失后的重建仍需单独设计。
+`status: uploaded` 表示原件和元数据保存成功。`queuedAt` 非空仅代表任务入队。2026-10-07 增加独立文本抽取 Worker 和首版前端「我的文档」。OCR、PDF 转换、鉴权尚未完成。队列任务保留以支持去重；任务定期清理及 Redis 数据卷丢失后的重建仍需单独设计。
 
 ## 文本抽取 Worker（2026-10-07）
 
@@ -51,7 +51,7 @@ npm --prefix apps/api run build
 npm --prefix apps/api run start:worker
 ```
 
-另一个终端运行原前端：`npm run dev`。两者目前独立。
+另一个终端运行前端：`npm run dev`。顶部「我的文档」已接入 API 上传、状态和正文查询，详见 [APEX-FRONTEND.md](APEX-FRONTEND.md)。前端、API 和 Worker 仍分别启动。
 
 Prisma 脚本明确加载仓库根目录 `.env`，避免在 apps/api 下执行时遗漏连接参数。后续变更 schema 使用 `npm --prefix apps/api run prisma:migrate -- --name <名称>`；已有迁移的交接环境使用 `prisma:deploy`，不会重置数据库。
 
@@ -95,4 +95,4 @@ Docker 启动再次遇到失效 socket；停止状态下备份 `Docker/run` 与 
 
 ## 下一阶段
 
-增加手动重试入口、鉴权与分页，再设计检索及原三维前端接入。LibreOffice/OCR/向量模型需要另行确定资源与验收标准；当前纯文本抽取不等于已生成预览或检索索引。
+首版前端接入已完成，见 [APEX-FRONTEND.md](APEX-FRONTEND.md)。后续增加手动重试、鉴权、分页和检索。LibreOffice/OCR/向量模型需要另行确定资源与验收标准；当前纯文本抽取不等于已生成预览或检索索引。

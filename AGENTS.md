@@ -299,3 +299,9 @@ WE 画质下拉增加「自定义」，仅此选择且超级模式关闭时显�
 - 已增加独立 Node/BullMQ Worker（apps/api，start:worker），读取 MinIO、核验原件、调用 Tika 并保存正文及处理状态。开发 Worker 与 API 分开运行；Worker Docker 发行、OCR、预览转换和索引仍未实现。
 - 数据库采用追加迁移，不重置；列表不返回正文，GET /api/documents/:id 读取正文。完整运行、状态语义和验证范围见 docs/BACKEND-STATUS.md。
 - verify:extraction 自行启动测试 Worker，注入失败和进程中断，只清理自己的测试数据。运行前停止其他 Worker，确保没有待处理任务；原 verify / verify:recovery 也要求 Worker 停止以避免清理竞争。
+
+### APEX 前端接入（2026-10-07）
+
+- 用户确认后端接口可用，并授权前端上传、进度与正文阅读。顶部「我的文档」复用原弹窗体系；不替换原 40 份三维档案，不改模型和时间轴。
+- 开发模式自动开启，同源 /api 由 Vite 5173 代理至本机 API 3000。生产默认关闭，独立 APEX 部署须配置网关并显式 VITE_APEX_ENABLED=true；壁纸不启用。
+- 真实浏览器流程与窄屏验证、运行方式和限制见 docs/APEX-FRONTEND.md。前端测试仅清理自身创建的数据，不能清空队列或用户文档。

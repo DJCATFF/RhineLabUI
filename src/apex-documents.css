@@ -1,0 +1,202 @@
+/* The fixed stage must not auto-scroll to a focused control during viewport changes. */
+#stage:has(.apex-modal) {
+  overflow: clip;
+}
+.apex-modal {
+  display: flex;
+  flex-direction: column;
+}
+.apex-modal h2 {
+  margin: 22px 0;
+}
+.apex-upload {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  border-block: 1px solid #a49c8e66;
+  padding: 14px 0;
+}
+.apex-upload label {
+  font-size: 14px;
+}
+.apex-upload small {
+  display: block;
+  font-size: 11px;
+  opacity: 0.7;
+  margin-top: 4px;
+}
+.apex-upload input {
+  min-width: 0;
+  flex: 1;
+  font: inherit;
+  font-size: 13px;
+}
+.apex-upload input::file-selector-button {
+  background: transparent;
+  color: inherit;
+  border: 1px solid #a49c8e;
+  padding: 9px 14px;
+  margin-right: 12px;
+  font: inherit;
+  cursor: pointer;
+}
+.apex-upload button {
+  border: 1px solid currentColor;
+  padding: 12px 20px;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.apex-modal button:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+.apex-hint {
+  font-size: 12px;
+  opacity: 0.7;
+  margin: 10px 0;
+  line-height: 1.6;
+}
+.apex-feedback {
+  font-size: 13px;
+  min-height: 22px;
+  margin: 0 0 12px;
+}
+.apex-columns {
+  display: grid;
+  grid-template-columns: 32% minmax(0, 1fr);
+  gap: 28px;
+  flex: 1;
+  min-height: 0;
+}
+.apex-directory {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid #a49c8e66;
+  padding-right: 22px;
+}
+.apex-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  padding-bottom: 10px;
+  gap: 12px;
+}
+.apex-refresh {
+  padding: 8px;
+}
+.apex-list {
+  overflow: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+}
+.apex-list-message {
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 0;
+}
+.apex-row {
+  display: block;
+  text-align: left;
+  width: 100%;
+  padding: 16px 12px;
+  border-bottom: 1px solid #a49c8e44;
+  border-left: 3px solid transparent;
+}
+.apex-row strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  font-weight: 500;
+}
+.apex-row span {
+  display: block;
+  margin-top: 7px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.apex-row[aria-pressed='true'] {
+  border-left-color: #c48237;
+  background: #a49c8e1a;
+}
+.apex-reader {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.apex-reader h3 {
+  font-size: 21px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.apex-meta {
+  font-size: 11px;
+  opacity: 0.65;
+  margin: 10px 0;
+}
+.apex-state {
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.apex-text {
+  min-height: 0;
+  flex: 1;
+  margin: 8px 0 0;
+  padding: 18px 0;
+  border-top: 1px solid #a49c8e66;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.9;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  overscroll-behavior: contain;
+  user-select: text;
+}
+.apex-text[hidden] {
+  display: none;
+}
+.apex-bottom {
+  margin-bottom: 0;
+}
+.apex-modal :focus-visible {
+  outline: 2px solid #bb792e;
+  outline-offset: 3px;
+}
+:is([data-layout='compact'], [data-layout='portrait']) .apex-modal {
+  overflow: auto;
+}
+:is([data-layout='compact'], [data-layout='portrait']) .apex-upload {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+:is([data-layout='compact'], [data-layout='portrait']) .apex-upload label {
+  width: 100%;
+}
+:is([data-layout='compact'], [data-layout='portrait']) .apex-columns {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: 22px;
+}
+:is([data-layout='compact'], [data-layout='portrait']) .apex-directory {
+  padding: 0 0 12px;
+  border-right: 0;
+  border-bottom: 1px solid #a49c8e66;
+}
+:is([data-layout='compact'], [data-layout='portrait']) .apex-list {
+  max-height: 200px;
+}
+:is([data-layout='compact'], [data-layout='portrait']) .apex-text {
+  flex: none;
+  max-height: 55vh;
+  font-size: 14px;
+}
+:is([data-layout='compact'], [data-layout='portrait']) .system-nav [data-action='documents'] {
+  font-size: 11px;
+  padding-inline: 8px;
+  white-space: nowrap;
+}

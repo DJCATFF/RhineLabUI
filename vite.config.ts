@@ -14,6 +14,7 @@ const hasNovecento = ["Normal", "DemiBold", "Bold"].every(weight =>
 );
 export default defineConfig(({ mode }) => ({
   base: mode === "wallpaper" ? "./" : "/",
+  server: { port: 5173, strictPort: true, proxy: { "/api": "http://127.0.0.1:3000" } },
   define: {
     __RHINE_MODELS__: JSON.stringify(Object.fromEntries(models.map(model => [model.key,model.fileName]))),
     __RHINE_NOVECENTO__: JSON.stringify(hasNovecento),

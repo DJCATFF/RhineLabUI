@@ -4,6 +4,8 @@ import { DocumentDecryption } from "./document-decryption";
 import "./document-decryption.css";
 import "./decryption.css";
 import { escapeHtml } from "./html";
+import { DocumentsPanel, documentsMarkup } from "./apex-documents";
+import "./apex-documents.css";
 import { normalizeQuality, qualityPresets, type QualityPreset, type RenderQuality } from "./render-quality";
 import { qualityMarkup, syncQualityUI } from "./quality-settings";
 import { superPerformanceQuality, wallpaperQuality } from "./wallpaper-quality";
@@ -47,6 +49,8 @@ let wallpaperEffects: WallpaperEffects | undefined;
 const $ = <T extends HTMLElement = HTMLElement>(selector: string) =>
   document.querySelector<T>(selector)!;
 import { logo, brandHeading } from "./brand";
+const apexEnabled = !isWallpaper && (import.meta.env.DEV || import.meta.env.VITE_APEX_ENABLED === "true");
+let documentsPanel: DocumentsPanel | undefined;
 
 $("#stage").innerHTML = `
   <div id="three-scene" class="three-scene"></div>
@@ -54,6 +58,7 @@ $("#stage").innerHTML = `
   <div id="boot-background" class="boot-background"><svg viewBox="0 0 1920 1080" preserveAspectRatio="none"><g fill="none" stroke="#fff" stroke-width="3"><path d="M-210 705C-45 705 182 704 247 567C337 377 99 306 4 435S27 680 169 631C309 584 227 314 279 111S568-113 568-113"/><path d="M1560-80C1374 114 1671 168 1601 323S1371 367 1431 480S1692 666 1559 787S1329 886 1498 1130"/><circle cx="1450" cy="648" r="346"/><circle cx="1450" cy="648" r="348"/></g></svg></div>
   <header class="brand">${brandHeading}</header>
   <nav class="system-nav" aria-label="系统导航">
+    ${apexEnabled ? '<button data-action="documents">我的文档 ↗</button>' : ''}
     <button data-action="search"><span class="nav-glyph">⌕</span> ARCHIVE INDEX <span class="key">/</span></button>
     <button data-action="saved" aria-label="查看收藏档案" title="收藏档案">＋ SAVED <span id="saved-count">00</span></button>
     <button class="settings-button" data-action="settings" aria-label="系统设置" title="系统设置"><span class="settings-glyph" aria-hidden="true">◷</span><span class="settings-label">设置</span></button>
@@ -101,7 +106,7 @@ let mode: Mode = "boot",
   bootStart = 0,
   lastStep = "",
   ready = false;
-let modal: "search" | "saved" | "settings" | null = null,
+let modal: "search" | "saved" | "settings" | "documents" | null = null,
   searchQuery = "",
   filter = "全部档案";
 let activeTab = "overview";
@@ -578,12 +583,15 @@ function openModal(kind: NonNullable<typeof modal>) {
   renderModal();
 }
 function closeModal(afterClose?: () => void) {
+  if (documentsPanel?.busy) { notify("文件正在上传，请等待上传结束后关闭。"); return; }
   if (!modal) {
     afterClose?.();
     return;
   }
   if (modalClosing) return;
   modalClosing = true;
+  documentsPanel?.dispose();
+  documentsPanel = undefined;
   audio.play("page-close");
   modalTransition!.hide(prefs.reduced, () => {
     modal = null;
@@ -600,7 +608,20 @@ function closeModal(afterClose?: () => void) {
 }
 function renderModal() {
   if (!modal) return;
+  documentsPanel?.dispose();
+  documentsPanel = undefined;
   modalTransition?.dispose();
+  if (modal === "documents") {
+    $("#modal-root").innerHTML = documentsMarkup;
+    const backdrop = $(".modal-backdrop");
+    backdrop.hidden = true;
+    modalTransition = new SurfaceTransition(backdrop, $(".terminal-modal"));
+    modalTransition.show(prefs.reduced);
+    documentsPanel = new DocumentsPanel($(".apex-modal"));
+    backdrop.addEventListener("click", e => { if (e.target === backdrop) closeModal(); });
+    requestAnimationFrame(() => { if (backdrop.isConnected && !modalClosing) $('[data-action="close-modal"]').focus({ preventScroll: true }); });
+    return;
+  }
   $("#modal-root").innerHTML =
     `<div class="modal-backdrop"><section class="terminal-modal ${modal === "settings" ? "settings-modal" : ""}" role="dialog" aria-modal="true" aria-label="${modal === "settings" ? "系统设置" : modal === "saved" ? "收藏档案" : "档案检索"}"><div class="modal-top"><span>RHINE LAB / ${modal === "settings" ? "SYSTEM PREFERENCES" : "ARCHIVE DIRECTORY"}</span><button data-action="close-modal" aria-label="关闭窗口">CLOSE <span>×</span></button></div>${modal === "settings" ? settingsMarkup() : `<h2>${modal === "saved" ? "SAVED ARCHIVES" : "ARCHIVE INDEX"}<small>${modal === "saved" ? "收藏档案" : "内部档案检索"}</small></h2><div class="search-field"><span>⌕</span><input id="archive-search" type="search" autocomplete="off" placeholder="输入档案编号、名称或科室" aria-label="检索档案"/><span class="key">ESC</span></div><div class="category-filters">${categories.map((c, i) => `<button data-filter="${escapeHtml(c)}" class="${i === 0 ? "active" : ""}">${escapeHtml(c)}</button>`).join("")}</div><div class="result-header"><span>FILE / 档案</span><span>DEPARTMENT / 科室</span><span>ACCESS</span></div><div id="search-results" class="search-results"></div><div class="modal-bottom"><span id="result-count"></span><span>INTERNAL DATABASE <i>●</i> CONNECTED</span></div>`}</section></div>`;
   const backdrop = $(".modal-backdrop");
@@ -767,7 +788,7 @@ document.addEventListener("click", (e) => {
     setMode("archive");
     audio.play("back");
   }
-  if (action === "search" || action === "saved" || action === "settings") {
+  if (action === "search" || action === "saved" || action === "settings" || (action === "documents" && apexEnabled)) {
     el.focus({ preventScroll: true });
     openModal(action);
   }
@@ -816,7 +837,7 @@ document.addEventListener("keydown", (e) => {
   if (modal && e.key === "Tab") {
     const focusables = [
       ...$("#modal-root").querySelectorAll<HTMLElement>(
-        'button,input:not(:disabled),select:not(:disabled),summary,[tabindex="0"]',
+        'button:not(:disabled),input:not(:disabled),select:not(:disabled),summary,[tabindex="0"]',
       ),
     ];
     const visible = focusables.filter(el => el.getClientRects().length > 0);

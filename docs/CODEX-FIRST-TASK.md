@@ -16,7 +16,7 @@
 
 ## 下一项业务工作
 
-已增加 Worker 消费 `extract-text`，读取 MinIO 原件、调用 Tika、保存文本及处理结果，支持自动重试与重复任务跳过。下一步设计手动重试、鉴权、分页、检索与前端接入。运行命令与实际验证范围见 BACKEND-STATUS.md。
+已增加 Worker 消费 `extract-text`，读取 MinIO 原件、调用 Tika、保存文本及处理结果，支持自动重试与重复任务跳过。前端「我的文档」已接入上传、进度及正文，运行与验证见 APEX-FRONTEND.md。下一步设计手动重试、鉴权、分页与检索。后端运行命令与实际验证范围见 BACKEND-STATUS.md。
 
 ## 约束
 
