@@ -10,6 +10,22 @@ GET {{baseUrl}}/documents
 ### Use the uploaded id; poll until ready or failed, then read text
 GET {{baseUrl}}/documents/{{documentId}}
 
+### Search filename/title/extracted body (up to 200 characters)
+GET {{baseUrl}}/documents?q=APEX
+
+### Next page after the preceding page's last document id
+GET {{baseUrl}}/documents?after={{documentId}}
+
+### Download original with UTF-8 filename
+GET {{baseUrl}}/documents/{{documentId}}/file
+
+### Open original PDF (non-PDF returns 400)
+GET {{baseUrl}}/documents/{{documentId}}/file?preview=1
+
+### Byte range (206; invalid range returns 416)
+GET {{baseUrl}}/documents/{{documentId}}/file
+Range: bytes=0-15
+
 ### Upload a document (20 MiB maximum)
 POST {{baseUrl}}/documents
 Content-Type: multipart/form-data; boundary=apex-boundary

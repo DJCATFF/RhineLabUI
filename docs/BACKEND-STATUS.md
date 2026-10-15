@@ -1,6 +1,6 @@
 # APEX 后端：上传与文本抽取
 
-更新时间：2026-10-07。开发分支：`feature/backend`，从 `develop` / 原版基线 `17a1611` 开始。此阶段不合并正式网站 main，不迁移前端目录。用户已选择同步到 DJCATFF 自己的 Fork。
+更新时间：2026-10-15。开发分支：`feature/backend`，从 `develop` / 原版基线 `17a1611` 开始。此阶段不合并正式网站 main，不迁移前端目录。用户已选择同步到 DJCATFF 自己的 Fork。
 
 Fork：https://github.com/DJCATFF/RhineLabUI 。本地 `origin` 指向该 Fork，`upstream` 保留 `LBEILC/RhineLabUI`。2026-10-07 用户补充授权后，通过 GitHub 连接器成功同步至 `feature/backend`，同步提交 `6cf95c8` 的完整文件树与本地 `7963044` 一致（46 个变更文件）。本地原始实现及验证提交 `8590019`、`8eb33d9`、`7963044` 保留于备份分支 `codex/backend-local-before-fork-sync`；连接器同步产生新的提交编号。正式 main 和上游未修改。
 
@@ -14,7 +14,7 @@ Fork：https://github.com/DJCATFF/RhineLabUI 。本地 `origin` 指向该 Fork�
 - PostgreSQL 初始迁移创建 `documents` 并启用 pgvector 扩展；目前没有向量数据和检索功能。
 - 上传后向 BullMQ 的 `documents` 队列投递 `extract-text`，任务 ID 为文档 ID。数据库的 `queuedAt = null` 记录作为持久化待投递列表，每 5 秒重试，API 重启后继续。
 - 数据库写入失败会尝试删除本次已存储的原件；清理失败记录对象键供人工处理。存储成功与数据库提交之间的进程崩溃仍可能留下孤立对象，后续需增加定期对账。
-- `GET /api/documents` 返回最近 100 条真实数据库记录；尚未实现完整分页。
+- `GET /api/documents` 每页返回最多 100 条元数据，可用 `after=<上一页末条 id>` 继续加载；`q` 按文件名、标题或提取正文进行大小写不敏感子串搜索，最多 200 字符，不是分词/向量检索。
 - Redis 启用 AOF 与 noeviction；Compose 服务端口只绑定本机。
 
 `status: uploaded` 表示原件和元数据保存成功。`queuedAt` 非空仅代表任务入队。2026-10-07 增加独立文本抽取 Worker 和首版前端「我的文档」。OCR、PDF 转换、鉴权尚未完成。队列任务保留以支持去重；任务定期清理及 Redis 数据卷丢失后的重建仍需单独设计。
@@ -32,6 +32,16 @@ Fork：https://github.com/DJCATFF/RhineLabUI 。本地 `origin` 指向该 Fork�
 - 暂无面向用户的手动重试接口。开发者可排除故障后重试保留的失败 BullMQ 任务；不要删除用户原件或清空队列。
 
 ## 本地运行
+
+### 真实档案与原件接口（2026-10-15）
+
+- 追加迁移 `20261015000100_archive_number`，为旧记录及新上传生成唯一自增 `archiveNumber`。三维界面显示稳定 `D-xxx`，不使用列表位置编号；删除及测试可留下编号空隙，不重置序列。
+- `GET /api/documents/:id/file` 流式返回原件，使用 attachment 与 UTF-8 文件名；`?preview=1` 校验前 1024 字节的 PDF 标识并以 application/pdf + inline 返回。该标识检查不是完整内容安全检测。
+- 支持单一 HTTP Range、206、Content-Range 和无效范围 416；不存在返回 404，非 PDF 请求预览返回 400，原件存储故障返回 503。返回 private/no-store 与 nosniff，不把私有桶变成公开桶。
+- `/?library=documents` 使用真实记录进入原三维界面；详情显示提取状态/正文并提供 PDF 原件入口。PDF 阅读器使用浏览器原生实现，未引入 PDF.js；Office 转换、OCR、账号权限、版本管理、全文索引与 AI 均未实现。
+- 本机追加迁移成功；后端 19 项测试、ESLint、前端构建、原内容 18 项、原阵列 20,000 次导航及视口检查通过。真实服务和独立 Edge 完成 34 PDF 档案、搜索、下载、预览、完整/减少动态效果及原上传面板回归。详见 APEX-FRONTEND.md；合成测试数据按本轮 ID 清理，保留用户上传。
+
+### 启动命令
 
 ```powershell
 # 根目录，首次运行。已有 .env 时保留，不要覆盖。

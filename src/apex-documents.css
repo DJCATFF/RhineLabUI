@@ -1,5 +1,71 @@
 /* The fixed stage must not auto-scroll to a focused control during viewport changes. */
-#stage:has(.apex-modal) {
+.apex-search {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.apex-search input {
+  flex: 1;
+  min-width: 160px;
+  border: 0;
+  border-bottom: 1px solid #a49c8e;
+  padding: 10px;
+  background: transparent;
+  color: inherit;
+}
+.apex-search button,
+.apex-search a {
+  padding: 8px 0;
+  color: inherit;
+}
+.apex-original-actions {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 13px;
+  margin: 10px 0;
+}
+.apex-original-actions[hidden],
+.apex-original-actions a[hidden] {
+  display: none;
+}
+.apex-original-actions a {
+  color: inherit;
+  padding: 8px 0;
+  border-bottom: 1px solid currentColor;
+}
+.apex-document-body {
+  max-height: 360px;
+  overflow: auto;
+}
+#stage:has(.apex-document-body) .detail-title-cn {
+  overflow-wrap: anywhere;
+}
+#document-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.8;
+  user-select: text;
+  opacity: var(--apex-text-clarity, 1);
+}
+#document-refresh {
+  padding: 12px 0;
+}
+.file-ticks button[hidden] {
+  display: none;
+}
+[data-layout='portrait'] .system-nav:has([data-action='library']) {
+  flex-wrap: wrap;
+  max-width: calc(100% - 40px);
+  justify-content: flex-end;
+}
+#stage:has(.apex-modal),
+#stage:has(.apex-document-body) {
   overflow: clip;
 }
 .apex-modal {

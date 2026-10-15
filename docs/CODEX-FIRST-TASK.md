@@ -16,7 +16,9 @@
 
 ## 下一项业务工作
 
-已增加 Worker 消费 `extract-text`，读取 MinIO 原件、调用 Tika、保存文本及处理结果，支持自动重试与重复任务跳过。前端「我的文档」已接入上传、进度及正文，运行与验证见 APEX-FRONTEND.md。下一步设计手动重试、鉴权、分页与检索。后端运行命令与实际验证范围见 BACKEND-STATUS.md。
+2026-10-15 已接通 Stage 1 的 PDF 核心闭环：上传 → MinIO/数据库 → 真实三维档案 → ACCESS FILE/解密 → 正文与原始 PDF → 中文子串搜索/下载。增加稳定 D-xxx 编号、游标分页和 `/?library=documents`，原演示保留 `/`。运行与验证见 APEX-FRONTEND.md、BACKEND-STATUS.md。
+
+下一步先由用户试用真实文档阅读，再按蓝图推进 Workspace 的业务分类与文档元数据。原生 PDF 新标签页是本轮实现，PDF.js 内嵌阅读器、版本、权限、手动重新提取和带索引的全文检索仍待实现；不要把此闭环说成完整 AI OS 或整份蓝图已完成。
 
 ## 约束
 

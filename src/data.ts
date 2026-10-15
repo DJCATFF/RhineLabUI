@@ -12,11 +12,21 @@ export interface ArchiveRecord {
   abstract: string;
   findings: string[];
   source: string;
+  documentId?: string;
+  empty?: boolean;
 }
 
-export const records: ArchiveRecord[] = content.records;
+export const records: ArchiveRecord[] = [...content.records];
 export const categories = ["全部档案", ...content.categories];
-export const archiveColumns = content.columns;
+export const archiveColumns = [...content.columns];
+export let usingDocumentArchive = false;
+
+export function installDocumentArchive(items: ArchiveRecord[], columns: string[]) {
+  records.splice(0, records.length, ...items);
+  archiveColumns.splice(0, archiveColumns.length, ...columns);
+  categories.splice(0, categories.length, '全部档案', ...columns);
+  usingDocumentArchive = true;
+}
 
 export function columnFiles(lane: number) {
   return records

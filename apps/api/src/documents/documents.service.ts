@@ -10,6 +10,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { InfrastructureService } from './infrastructure.service';
+import { fileRange, fileDisposition } from './file-response';
 
 @Injectable()
 export class DocumentsService implements OnModuleInit, OnModuleDestroy {
@@ -22,12 +23,66 @@ export class DocumentsService implements OnModuleInit, OnModuleDestroy {
     private readonly infra: InfrastructureService,
   ) {}
 
-  findAll() {
+  findAll(query?: string, after?: string) {
+    if (query && (typeof query !== 'string' || query.length > 200))
+      throw new BadRequestException('Search is limited to 200 characters.');
+    if (after && (typeof after !== 'string' || after.length > 100))
+      throw new BadRequestException('Invalid cursor.');
+    const q = query?.trim();
     return this.prisma.document.findMany({
+      where: q
+        ? {
+            OR: [
+              { fileName: { contains: q, mode: 'insensitive' } },
+              { title: { contains: q, mode: 'insensitive' } },
+              { text: { contains: q, mode: 'insensitive' } },
+            ],
+          }
+        : undefined,
+      ...(after ? { cursor: { id: after }, skip: 1 } : {}),
       take: 100,
       omit: { text: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
+  }
+
+  async file(id: string, range?: string, inline = false) {
+    const document = await this.prisma.document.findUnique({ where: { id }, omit: { text: true } });
+    if (!document) throw new NotFoundException('Document not found.');
+    const portion = fileRange(range, document.size);
+    try {
+      if (inline) {
+        const header = await this.infra.storage.getPartialObject(
+          this.infra.bucket,
+          document.objectKey,
+          0,
+          Math.min(document.size, 1024),
+        );
+        const parts: Buffer[] = [];
+        for await (const chunk of header) parts.push(Buffer.from(chunk));
+        if (!Buffer.concat(parts).subarray(0, 1024).includes(Buffer.from('%PDF-'))) {
+          throw new BadRequestException(
+            'Only PDF originals can be previewed. Download this file instead.',
+          );
+        }
+      }
+      const stream = await this.infra.storage.getPartialObject(
+        this.infra.bucket,
+        document.objectKey,
+        portion.offset,
+        portion.length,
+      );
+      return {
+        stream,
+        ...portion,
+        size: document.size,
+        type: inline ? 'application/pdf' : 'application/octet-stream',
+        disposition: fileDisposition(document.fileName, inline),
+      };
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      throw new ServiceUnavailableException('Original file storage is unavailable.');
+    }
   }
 
   async findOne(id: string) {

@@ -1,13 +1,4 @@
-type DocumentRow = {
-  id: string;
-  fileName: string;
-  size: number;
-  status: string;
-  createdAt: string;
-  extractedAt?: string | null;
-  text?: string | null;
-  extractionError?: string | null;
-};
+import { originalUrl, archiveUrl, type DocumentRow } from './document-api';
 const labels: Record<string, string> = {
   uploaded: '等待处理',
   processing: '正在提取正文',
@@ -20,11 +11,12 @@ const pending = (status: string) => ['uploaded', 'processing', 'retrying'].inclu
 export const documentsMarkup = `<div class="modal-backdrop"><section class="terminal-modal apex-modal" role="dialog" aria-modal="true" aria-label="我的文档">
   <div class="modal-top"><span>APEX / DOCUMENT LIBRARY</span><button data-action="close-modal" aria-label="关闭窗口">CLOSE <span>×</span></button></div>
   <h2>MY DOCUMENTS <small>我的文档</small></h2>
+  <form class="apex-search"><input type="search" maxlength="200" aria-label="搜索文档" placeholder="搜索文件名或正文，支持中文"/><button type="submit">搜索</button><button type="button" class="apex-search-clear">全部文档</button><a href="/?library=documents">进入真实三维档案 ↗</a></form>
   <form class="apex-upload"><label for="apex-file">选择文档 <small>单个文件不超过 20 MiB</small></label><input id="apex-file" type="file" aria-describedby="apex-upload-help"/><button type="submit">上传文档 ↑</button></form>
   <p id="apex-upload-help" class="apex-hint">上传 TXT、PDF、Word 等文档，完成处理后即可阅读提取的正文。</p>
   <p class="apex-feedback" role="status" aria-live="polite"></p>
   <div class="apex-columns"><section class="apex-directory" aria-label="文档列表"><div class="apex-list-heading"><span>最近 100 份文档</span><button type="button" class="apex-refresh">刷新 ↻</button></div><p class="apex-list-message">正在读取文档…</p><div class="apex-list"></div></section>
-  <article class="apex-reader" aria-label="文档正文"><h3>选择一份文档</h3><p class="apex-meta"></p><p class="apex-state" role="status" aria-live="polite">上传文件，或从左侧列表选择文档。</p><pre class="apex-text" tabindex="0" aria-label="提取的正文" hidden></pre></article></div>
+  <article class="apex-reader" aria-label="文档正文"><h3>选择一份文档</h3><p class="apex-meta"></p><div class="apex-original-actions" hidden><a class="apex-view-archive">在三维档案中查看 ↗</a><a class="apex-view-pdf" target="_blank" rel="noopener noreferrer">查看 PDF ↗</a><a class="apex-download" download>下载原件 ↓</a></div><p class="apex-state" role="status" aria-live="polite">上传文件，或从左侧列表选择文档。</p><pre class="apex-text" tabindex="0" aria-label="提取的正文" hidden></pre></article></div>
   <p class="apex-hint apex-bottom">此处展示提取的纯文本，原文件的排版和图片不会在正文中呈现。</p>
 </section></div>`;
 
@@ -38,9 +30,20 @@ export class DocumentsPanel {
   private selected?: DocumentRow;
   private rows = new Map<string, HTMLButtonElement>();
   private readerKey = '';
+  private query = '';
   busy = false;
 
   constructor(private root: HTMLElement) {
+    this.node<HTMLFormElement>('.apex-search').addEventListener('submit', (event) => {
+      event.preventDefault();
+      this.query = this.node<HTMLInputElement>('.apex-search input').value.trim();
+      void this.refresh();
+    });
+    this.node('.apex-search-clear').addEventListener('click', () => {
+      this.query = '';
+      this.node<HTMLInputElement>('.apex-search input').value = '';
+      void this.refresh();
+    });
     this.node<HTMLFormElement>('.apex-upload').addEventListener('submit', (event) => {
       event.preventDefault();
       void this.upload();
@@ -75,6 +78,12 @@ export class DocumentsPanel {
   }
 
   private paint(document: DocumentRow) {
+    this.node('.apex-original-actions').hidden = false;
+    this.node<HTMLAnchorElement>('.apex-view-archive').href = archiveUrl(document.id);
+    const pdf = this.node<HTMLAnchorElement>('.apex-view-pdf');
+    pdf.hidden = !/\.pdf$/i.test(document.fileName);
+    pdf.href = originalUrl(document.id, true);
+    this.node<HTMLAnchorElement>('.apex-download').href = originalUrl(document.id);
     this.node('h3').textContent = document.fileName;
     this.node('.apex-meta').textContent =
       `${(document.size / 1024).toLocaleString('zh-CN', { maximumFractionDigits: 1 })} KiB · ${new Date(document.createdAt).toLocaleString('zh-CN')}`;
@@ -129,17 +138,26 @@ export class DocumentsPanel {
     if (this.disposed || this.refreshing) return;
     clearTimeout(this.timer);
     this.refreshing = true;
+    const query = this.query;
     const button = this.node<HTMLButtonElement>('.apex-refresh');
     button.disabled = true;
     try {
-      const documents = (await this.request('')) as DocumentRow[];
+      const documents = (await this.request(
+        query ? `?q=${encodeURIComponent(query)}` : '',
+      )) as DocumentRow[];
       if (this.disposed) return;
+      if (query !== this.query) return;
       if (!Array.isArray(documents) || documents.some((d) => typeof d.id !== 'string'))
         throw new Error('文档服务返回异常，请稍后重试。');
       const list = this.node('.apex-list');
+      this.node('.apex-list-heading span').textContent = query
+        ? '匹配结果（最多 100 份）'
+        : '最近 100 份文档';
       this.node('.apex-list-message').textContent = documents.length
         ? ''
-        : '还没有文档，选择文件开始上传。';
+        : query
+          ? '没有匹配的文档，请更换关键词或查看全部文档。'
+          : '还没有文档，选择文件开始上传。';
       const ids = new Set(documents.map((d) => d.id));
       for (const [id, row] of this.rows)
         if (!ids.has(id)) {
@@ -182,10 +200,13 @@ export class DocumentsPanel {
       this.refreshing = false;
       if (!this.disposed) {
         button.disabled = false;
-        this.timer = setTimeout(() => {
-          if (document.hidden) this.timer = setTimeout(() => void this.refresh(), 5000);
-          else void this.refresh();
-        }, 3000);
+        this.timer = setTimeout(
+          () => {
+            if (document.hidden) this.timer = setTimeout(() => void this.refresh(), 5000);
+            else void this.refresh();
+          },
+          query === this.query ? 3000 : 0,
+        );
       }
     }
   }
@@ -204,7 +225,7 @@ export class DocumentsPanel {
     }
     this.busy = true;
     input.disabled = true;
-    const button = this.node<HTMLButtonElement>('[type="submit"]');
+    const button = this.node<HTMLButtonElement>('.apex-upload [type="submit"]');
     button.disabled = true;
     button.textContent = '正在上传…';
     this.feedback('正在保存文件，请保持窗口打开。');
@@ -214,6 +235,8 @@ export class DocumentsPanel {
       const uploaded = (await this.request('', { method: 'POST', body })) as DocumentRow;
       if (this.disposed) return;
       input.value = '';
+      this.query = '';
+      this.node<HTMLInputElement>('.apex-search input').value = '';
       this.feedback('上传成功，文件已保存。处理进度会自动更新。');
       await this.select(uploaded);
       await this.refresh();

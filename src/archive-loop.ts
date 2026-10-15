@@ -14,6 +14,20 @@ export function wrap(value: number, count: number) {
   return ((value % count) + count) % count;
 }
 
+// Rebase by a shared period so every column keeps its document identity.
+export function rowRebaseShift(row: number) {
+  if (Math.abs(row) <= 2048) return 0;
+  let period = 1;
+  for (let lane = 0; lane < archiveColumns.length; lane++) {
+    const count = columnFiles(lane).length;
+    let a = period, b = count;
+    while (b) { const remainder = a % b; a = b; b = remainder; }
+    period = period / a * count;
+    if (!Number.isSafeInteger(period) || period > Math.abs(row - 12)) return 0;
+  }
+  return Math.trunc((row - 12) / period) * period;
+}
+
 // Choose an occurrence of an item in an unbounded sequence. Directional moves
 // use adjacent cells instead, so the last-to-first transition never reverses.
 export function nearestOccurrence(

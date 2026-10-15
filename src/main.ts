@@ -6,6 +6,8 @@ import "./decryption.css";
 import { escapeHtml } from "./html";
 import { DocumentsPanel, documentsMarkup } from "./apex-documents";
 import "./apex-documents.css";
+import { archiveUrl } from "./document-api";
+import { documentDetailMarkup, watchDocument } from "./document-detail";
 import { normalizeQuality, qualityPresets, type QualityPreset, type RenderQuality } from "./render-quality";
 import { qualityMarkup, syncQualityUI } from "./quality-settings";
 import { superPerformanceQuality, wallpaperQuality } from "./wallpaper-quality";
@@ -29,6 +31,7 @@ import {
   archiveColumns,
   columnFiles,
   fileLocation,
+  usingDocumentArchive,
 } from "./data";
 import { TerminalAudio } from "./audio";
 import { audioSettingsMarkup } from "./audio-settings";
@@ -51,6 +54,9 @@ const $ = <T extends HTMLElement = HTMLElement>(selector: string) =>
 import { logo, brandHeading } from "./brand";
 const apexEnabled = !isWallpaper && (import.meta.env.DEV || import.meta.env.VITE_APEX_ENABLED === "true");
 let documentsPanel: DocumentsPanel | undefined;
+let stopDocumentWatch: (() => void) | undefined;
+const requestedDocument = new URLSearchParams(location.search).get("document");
+const initialSelection = usingDocumentArchive ? Math.max(0, records.findIndex(record => requestedDocument ? record.documentId === requestedDocument : Boolean(record.documentId))) : 0;
 
 $("#stage").innerHTML = `
   <div id="three-scene" class="three-scene"></div>
@@ -59,6 +65,7 @@ $("#stage").innerHTML = `
   <header class="brand">${brandHeading}</header>
   <nav class="system-nav" aria-label="系统导航">
     ${apexEnabled ? '<button data-action="documents">我的文档 ↗</button>' : ''}
+    ${apexEnabled ? `<button data-action="library">${usingDocumentArchive ? '刷新真实档案' : '真实档案 ↗'}</button>${usingDocumentArchive ? '<button data-action="demo">演示档案</button>' : ''}` : ''}
     <button data-action="search"><span class="nav-glyph">⌕</span> ARCHIVE INDEX <span class="key">/</span></button>
     <button data-action="saved" aria-label="查看收藏档案" title="收藏档案">＋ SAVED <span id="saved-count">00</span></button>
     <button class="settings-button" data-action="settings" aria-label="系统设置" title="系统设置"><span class="settings-glyph" aria-hidden="true">◷</span><span class="settings-label">设置</span></button>
@@ -102,7 +109,7 @@ $("#viewport").insertAdjacentHTML("beforeend", '<button class="mobile-entry" dat
 
 type Mode = "boot" | "archive" | "detail";
 let mode: Mode = "boot",
-  selected = 0,
+  selected = initialSelection,
   bootStart = 0,
   lastStep = "",
   ready = false;
@@ -146,7 +153,8 @@ function readLocal<T>(key: string, fallback: T): T {
     return fallback;
   }
 }
-const saved = new Set<string>(readLocal<string[]>("rhine-saved", []));
+const savedKey = usingDocumentArchive ? "apex-saved" : "rhine-saved";
+const saved = new Set<string>(readLocal<string[]>(savedKey, []));
 const storedPrefs = readLocal<Partial<{ sound: boolean; music: boolean; soundVolume: number; musicVolume: number; reduced: boolean; quality: boolean; rendering: RenderQuality; superPerformance: boolean; colorTheme: "light" | "dark" }>>("rhine-settings", {});
 const prefs = {
   sound: true,
@@ -328,7 +336,7 @@ window.visualViewport?.addEventListener("resize", fit);
 window.visualViewport?.addEventListener("scroll", fit);
 matchMedia("(pointer: coarse)").addEventListener("change", fit);
 fit();
-$("#file-ticks").innerHTML = columnFiles(fileLocation(selected).lane)
+$("#file-ticks").innerHTML = Array.from({ length: 8 }, (_, index) => index)
   .map(
     (index) => `<button data-select="${index}"></button>`,
   )
@@ -336,6 +344,7 @@ $("#file-ticks").innerHTML = columnFiles(fileLocation(selected).lane)
 const fileTicks = [...$("#file-ticks").querySelectorAll<HTMLButtonElement>("button")];
 
 function setMode(next: Mode) {
+  if (next !== "detail") { stopDocumentWatch?.(); stopDocumentWatch = undefined; }
   if (workbench?.enabled && next === "detail") next = "archive";
   const previousMode = mode;
   rollingTitles.forEach(title => title.update({ animated: !prefs.reduced && next === "archive" }));
@@ -414,6 +423,8 @@ function updateSelection(navigation?: ArchiveNavigation) {
   const r = records[selected];
   const { lane } = fileLocation(selected);
   const files = columnFiles(lane);
+  $("#selected-id").firstChild!.textContent = `${r.id.slice(0, 2)}`;
+  $<HTMLButtonElement>(".read-file").disabled = Boolean(r.empty);
   selectionTitle.update({ text: r.title, animated: !prefs.reduced && mode === "archive" });
   clearanceTitle.update({ text: r.clearance, animated: !prefs.reduced && mode === "archive" });
   categoryTitle.update({ text: r.category, animated: !prefs.reduced && mode === "archive" });
@@ -429,14 +440,14 @@ function updateSelection(navigation?: ArchiveNavigation) {
     direction,
   });
   fileCounter.update({
-    value: files.indexOf(selected) + 1,
+    value: r.empty ? 0 : files.indexOf(selected) + 1,
     animated: !prefs.reduced && mode === "archive",
     direction:
       navigation && "axis" in navigation && navigation.axis === "row"
         ? direction
         : "auto",
   });
-  $(".count-total").textContent = String(files.length).padStart(2, "0");
+  $(".count-total").textContent = String(r.empty ? 0 : files.length).padStart(2, "0");
   columnCounter.update({
     value: lane + 1,
     animated: !prefs.reduced && mode === "archive",
@@ -448,8 +459,11 @@ function updateSelection(navigation?: ArchiveNavigation) {
   columnTitle.update({ text: archiveColumns[lane], animated: !prefs.reduced && mode === "archive" });
   $<HTMLButtonElement>('[data-action="column-prev"]').disabled = false;
   $<HTMLButtonElement>('[data-action="column-next"]').disabled = false;
+  const tickStart = Math.max(0, Math.min(files.indexOf(selected) - 3, files.length - fileTicks.length));
   fileTicks.forEach((button, slot) => {
-    const index = files[slot], record = records[index];
+    const index = files[tickStart + slot], record = records[index];
+    button.hidden = !record || Boolean(record.empty);
+    if (!record) return;
     button.dataset.select = String(index);
     button.setAttribute("aria-label", `选择档案 ${record.id} ${record.title}`);
     button.title = `${record.id} · ${record.title}`;
@@ -468,13 +482,14 @@ function replayBootAfterModal(forcePreview: boolean) {
   lastStep = "";
   setMode(prefs.reduced && !forcePreview ? "archive" : "boot");
   audio.restartBoot();
-  scene?.select(0);
-  selected = 0;
+  scene?.select(initialSelection);
+  selected = initialSelection;
   updateSelection();
   if (!forcePreview) audio.play("ui-tick");
 }
 function openFile() {
   if (!ready) return;
+  if (records[selected].empty) { notify("此分类暂无文档，请从“我的文档”上传。"); return; }
   closeModal(() => {
     setMode("detail");
     audio.play("open");
@@ -485,7 +500,7 @@ function toggleSaved() {
   if (saved.has(id)) saved.delete(id);
   else saved.add(id);
   try {
-    localStorage.setItem("rhine-saved", JSON.stringify([...saved]));
+    localStorage.setItem(savedKey, JSON.stringify([...saved]));
   } catch {}
   $("#saved-count").textContent = String(saved.size).padStart(2, "0");
   const button = $<HTMLButtonElement>('[data-action="bookmark"]');
@@ -502,8 +517,18 @@ function toggleSaved() {
   notify(saved.has(id) ? "档案已加入收藏" : "已取消收藏");
 }
 function renderDetail() {
+  stopDocumentWatch?.(); stopDocumentWatch = undefined;
   tabTransition.cancel();
   const r = records[selected];
+  if (r.documentId) {
+    $("#object-id").textContent = r.id;
+    $("#detail-content").innerHTML = documentDetailMarkup(r, saved.has(r.id));
+    $("#detail-content").setAttribute("tabindex", "-1");
+    $('[data-action="bookmark"]').setAttribute("aria-pressed", String(saved.has(r.id)));
+    documentDecryption.reset($("#detail-content"), prefs.reduced || !scene || scene.decryptionFrame.phase === "clear");
+    stopDocumentWatch = watchDocument($("#detail-content"), r.documentId, () => documentDecryption.refresh());
+    return;
+  }
   $("#object-id").textContent = "NO." + String(selected + 1).padStart(3, "0");
   $("#detail-content").innerHTML = `
   <div class="detail-kicker"><span>FILE ${r.id}</span><span>${escapeHtml(r.clearance)}</span></div>
@@ -647,6 +672,7 @@ function renderModal() {
 function renderResults() {
   const results = records
     .map((r, i) => ({ r, i }))
+    .filter(({ r }) => !r.empty)
     .filter(
       ({ r }) =>
         (modal !== "saved" || saved.has(r.id)) &&
@@ -788,9 +814,11 @@ document.addEventListener("click", (e) => {
     setMode("archive");
     audio.play("back");
   }
+  if (action === "library" && apexEnabled) location.href = archiveUrl();
+  if (action === "demo" && apexEnabled) location.href = "/";
   if (action === "search" || action === "saved" || action === "settings" || (action === "documents" && apexEnabled)) {
     el.focus({ preventScroll: true });
-    openModal(action);
+    openModal(action === "search" && usingDocumentArchive ? "documents" : action);
   }
   if (action === "close-modal") closeModal();
   if (action === "bookmark") toggleSaved();
@@ -837,7 +865,7 @@ document.addEventListener("keydown", (e) => {
   if (modal && e.key === "Tab") {
     const focusables = [
       ...$("#modal-root").querySelectorAll<HTMLElement>(
-        'button:not(:disabled),input:not(:disabled),select:not(:disabled),summary,[tabindex="0"]',
+        'a[href],button:not(:disabled),input:not(:disabled),select:not(:disabled),summary,[tabindex="0"]',
       ),
     ];
     const visible = focusables.filter(el => el.getClientRects().length > 0);
@@ -868,7 +896,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "/") {
     e.preventDefault();
     if (mode === "boot") setMode("archive");
-    openModal("search");
+    openModal(usingDocumentArchive ? "documents" : "search");
   }
   if (e.key === "ArrowLeft" && mode !== "boot") {
     e.preventDefault();
@@ -980,6 +1008,7 @@ function frame(ms: number) {
   if (threeState === "closing" && scene?.presentationHidden) releaseThree();
   playground?.position();
   if (scene && mode === "detail") {
+    $("#detail-content").style.setProperty("--apex-text-clarity", String(prefs.reduced ? 1 : scene.decryptionFrame.clarity));
     documentDecryption.update(time, scene.decryptionFrame, prefs.reduced);
     $("#detail-content").style.opacity = String(scene.detailVisibility);
     $("#detail-content").style.translate =
@@ -1021,13 +1050,14 @@ function bindScene(scene: ArchiveScene, cell?: { lane: number; row: number }) {
     };
     scene.onHover = (i) => {
       const label = $("#hover-label");
-      if (i === null) {
+      if (i === null || records[i].empty) {
         label.hidden = true;
         hoverCode.finish();
         hoverTitle.finish();
         return;
       }
       const animated = !prefs.reduced && mode === "archive";
+      label.firstChild!.textContent = records[i].id.slice(0, 2);
       hoverCode.update({
         value: Number(records[i].id.slice(2)),
         animated: !label.hidden && animated,
@@ -1126,7 +1156,7 @@ async function start() {
     if (scene) bindScene(scene);
     savePrefs();
     ready = true;
-    select(0);
+    select(initialSelection);
     if (entry) entry.ready();
     else {
       if (isWallpaper) {
