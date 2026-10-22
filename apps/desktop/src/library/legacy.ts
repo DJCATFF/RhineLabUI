@@ -105,15 +105,14 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
   const collectionNames = new Set<string>();
   let maxArchiveNo = 0;
 
-  /** 把本次校验通过的原件挂到已有资料上；内容仍被占用时只能保持待补状态。 */
-  function attachOriginal(id: string, doc: LegacyDocument, saved: StoredOriginal): "attached" | "unchanged" | "pending" {
+  /**
+   * 把本次校验通过的原件挂到已有资料上。
+   * 同一份原件可以同时被多个资料引用：共享的是物理副本，关联仍各自独立。
+   */
+  function attachOriginal(id: string, doc: LegacyDocument, saved: StoredOriginal): "attached" | "unchanged" {
     const existing = db
       .prepare("SELECT id, storage_kind, path, sha256, size FROM files WHERE resource_id = ? LIMIT 1")
       .get(id) as ExistingFile | undefined;
-    const owner = db
-      .prepare("SELECT resource_id FROM files WHERE sha256 = ? AND size = ? LIMIT 1")
-      .get(saved.sha256, saved.size) as { resource_id: string } | undefined;
-    if (owner && owner.resource_id !== id) return "pending";
     if (existing) {
       if (existing.storage_kind === "managed" && existing.path === saved.path && existing.sha256 === saved.sha256) {
         return "unchanged";
@@ -176,12 +175,12 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
       if (plan === "backfill") {
         const saved = stored.get(id);
         if (!saved) {
-          result.filesPending += 1;
+          const linked = db.prepare("SELECT id FROM files WHERE resource_id = ? LIMIT 1").get(id);
+          if (linked) result.skipped += 1;
+          else result.filesPending += 1;
           continue;
         }
-        const state = attachOriginal(id, doc, saved);
-        if (state === "attached") result.backfilled += 1;
-        else if (state === "pending") result.filesPending += 1;
+        if (attachOriginal(id, doc, saved) === "attached") result.backfilled += 1;
         else result.skipped += 1;
         continue;
       }
@@ -215,43 +214,35 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
 
       const saved = stored.get(id);
       if (saved) {
-        const known = db.prepare("SELECT id FROM files WHERE sha256 = ? AND size = ?").get(saved.sha256, saved.size);
-        if (!known) {
-          db.prepare(
-            `INSERT INTO files (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
-             VALUES (?, ?, 'managed', ?, ?, ?, ?, ?, ?)`,
-          ).run(
-            randomUUID(),
-            id,
-            saved.path,
-            doc.mimeType || "application/octet-stream",
-            path.extname(doc.fileName || saved.path).toLowerCase(),
-            saved.size,
-            saved.sha256,
-            stamp,
-          );
-        }
+        // 同一份内容可能被多个旧库条目共享：物理副本只有一份，关联按条目各写一行。
+        db.prepare(
+          `INSERT INTO files (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
+           VALUES (?, ?, 'managed', ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          randomUUID(),
+          id,
+          saved.path,
+          doc.mimeType || "application/octet-stream",
+          path.extname(doc.fileName || saved.path).toLowerCase(),
+          saved.size,
+          saved.sha256,
+          stamp,
+        );
       } else if (fileName) {
-        const sha256 = doc.sha256 ?? "";
-        const size = Number(doc.size) || 0;
-        const known = sha256
-          ? db.prepare("SELECT id FROM files WHERE sha256 = ? AND size = ?").get(sha256, size)
-          : undefined;
-        if (!known) {
-          db.prepare(
-            `INSERT INTO files (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
-             VALUES (?, ?, 'legacy', ?, ?, ?, ?, ?, ?)`,
-          ).run(
-            randomUUID(),
-            id,
-            doc.objectKey || fileName,
-            doc.mimeType || "application/octet-stream",
-            ext,
-            size,
-            sha256,
-            stamp,
-          );
-        }
+        db.prepare(
+          `INSERT INTO files (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
+           VALUES (?, ?, 'legacy', ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          randomUUID(),
+          id,
+          doc.objectKey || fileName,
+          doc.mimeType || "application/octet-stream",
+          ext,
+          Number(doc.size) || 0,
+          doc.sha256 ?? "",
+          stamp,
+        );
+        // 没有随包原件：如实计入待补，不能因为同内容已登记而漏报。
         result.filesPending += 1;
       }
 

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { app } from "electron";
+import { openLibrary } from "./db";
 
 export interface StoredOriginal {
   path: string;
@@ -117,7 +118,18 @@ export async function saveOriginal(
   return { path: target, sha256, size, created: true };
 }
 
-/** 事务回滚时清理本次新建的原件副本，已存在的副本不会删除。 */
+/**
+ * 事务回滚时清理本次新建的原件副本。
+ * 同一份内容可能被多个资料共享，因此仍被引用时保留文件，只删除确实没有引用的副本。
+ */
 export async function discardOriginals(paths: string[]): Promise<void> {
-  await Promise.all(paths.map((target) => rm(target, { force: true })));
+  if (paths.length === 0) return;
+  const db = openLibrary();
+  const referenced = db.prepare("SELECT 1 FROM files WHERE path = ? LIMIT 1");
+  await Promise.all(
+    paths.map(async (target) => {
+      if (referenced.get(target)) return;
+      await rm(target, { force: true });
+    }),
+  );
 }

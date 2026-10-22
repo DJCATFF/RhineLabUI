@@ -145,6 +145,124 @@ export async function runLibraryRegression(): Promise<void> {
       again.backfilled === 0 && again.skipped === 1,
       JSON.stringify(again),
     );
+
+    // 5. 两个旧库条目共享同一份原件：各自关联，物理副本只有一份。
+    const sharedDir = path.join(root, "legacy-shared");
+    await mkdir(sharedDir, { recursive: true });
+    const sharedBody = Buffer.from("shared original content for two legacy entries\n".repeat(3), "utf8");
+    const sharedSha = createHash("sha256").update(sharedBody).digest("hex");
+    const sharedIds = [randomUUID(), randomUUID()];
+    const sharedDocs = sharedIds.map((id, index) => ({
+      id,
+      archiveNumber: 9101 + index,
+      title: `共享原件条目 ${index + 1}`,
+      fileName: `shared-${index + 1}.txt`,
+      mimeType: "text/plain",
+      size: sharedBody.length,
+      objectKey: `legacy/shared-${index + 1}.txt`,
+      sha256: sharedSha,
+      text: `共享原件正文 ${index + 1}`,
+      summary: null,
+      keyPoints: [] as string[],
+      tags: [] as string[],
+      category: null,
+    }));
+
+    const sharedText = path.join(sharedDir, "text-only.json");
+    await writeFile(sharedText, JSON.stringify({ version: 2, documents: sharedDocs }));
+    const sharedTextResult = await importLegacyExport(sharedText);
+    check(
+      "共享原件：先迁正文时两条都待补",
+      sharedTextResult.added === 2 && sharedTextResult.filesPending === 2,
+      JSON.stringify(sharedTextResult),
+    );
+
+    const sharedOriginals = path.join(sharedDir, "full.originals");
+    await mkdir(sharedOriginals, { recursive: true });
+    for (const id of sharedIds) await writeFile(path.join(sharedOriginals, `${id}.txt`), sharedBody);
+    const sharedFull = path.join(sharedDir, "full.json");
+    await writeFile(
+      sharedFull,
+      JSON.stringify({
+        version: 2,
+        documents: sharedDocs.map((doc) => ({
+          ...doc,
+          localFile: path.join("full.originals", `${doc.id}.txt`),
+        })),
+      }),
+    );
+
+    const sharedBackfill = await importLegacyExport(sharedFull);
+    check(
+      "共享原件：补齐后两条各自关联且无需待补",
+      sharedBackfill.backfilled === 2 && sharedBackfill.filesPending === 0,
+      JSON.stringify(sharedBackfill),
+    );
+    const sharedLinks = db
+      .prepare("SELECT resource_id, storage_kind, path FROM files WHERE resource_id IN (?, ?)")
+      .all(...sharedIds) as { resource_id: string; storage_kind: string; path: string }[];
+    check(
+      "共享原件：两条都登记为托管原件",
+      sharedLinks.length === 2 &&
+        sharedLinks.every((link) => link.storage_kind === "managed" && link.path.startsWith(originalsDir())),
+      JSON.stringify(sharedLinks),
+    );
+    check("共享原件：物理副本只有一份", new Set(sharedLinks.map((link) => link.path)).size === 1);
+    const sharedOpenable = await Promise.all(
+      sharedLinks.map((link) => originalIntact(link.path, { sha256: sharedSha, size: sharedBody.length })),
+    );
+    check("共享原件：两个条目都能打开原件", sharedOpenable.length === 2 && sharedOpenable.every(Boolean));
+
+    const sharedAgain = await importLegacyExport(sharedFull);
+    check(
+      "共享原件：重复迁移不重复关联",
+      sharedAgain.added === 0 &&
+        sharedAgain.backfilled === 0 &&
+        sharedAgain.filesPending === 0 &&
+        sharedAgain.skipped === 2,
+      JSON.stringify(sharedAgain),
+    );
+    check(
+      "共享原件：重复迁移后仍各有一条关联",
+      one("SELECT COUNT(*) AS n FROM files WHERE resource_id IN (?, ?)", ...sharedIds) === 2,
+    );
+
+    // 6. 同一份导出包内两条共享内容：都在首次导入时建立关联，待补数为零。
+    const directIds = [randomUUID(), randomUUID()];
+    const directOriginals = path.join(sharedDir, "direct.originals");
+    await mkdir(directOriginals, { recursive: true });
+    for (const id of directIds) await writeFile(path.join(directOriginals, `${id}.txt`), sharedBody);
+    const directDocs = directIds.map((id, index) => ({
+      id,
+      archiveNumber: 9201 + index,
+      title: `同包共享原件 ${index + 1}`,
+      fileName: `direct-${index + 1}.txt`,
+      mimeType: "text/plain",
+      size: sharedBody.length,
+      objectKey: `legacy/direct-${index + 1}.txt`,
+      sha256: sharedSha,
+      text: `同包共享正文 ${index + 1}`,
+      localFile: path.join("direct.originals", `${id}.txt`),
+    }));
+    const directJson = path.join(sharedDir, "direct.json");
+    await writeFile(directJson, JSON.stringify({ version: 2, documents: directDocs }));
+    const direct = await importLegacyExport(directJson);
+    check(
+      "同包共享原件：两条都新增且无待补",
+      direct.added === 2 && direct.filesPending === 0,
+      JSON.stringify(direct),
+    );
+    const directLinks = db
+      .prepare("SELECT storage_kind, path FROM files WHERE resource_id IN (?, ?)")
+      .all(...directIds) as { storage_kind: string; path: string }[];
+    check(
+      "同包共享原件：两条都能打开同一份原件",
+      directLinks.length === 2 &&
+        new Set(directLinks.map((link) => link.path)).size === 1 &&
+        directLinks.every((link) => link.storage_kind === "managed" && link.path.startsWith(originalsDir())) &&
+        (await originalIntact(directLinks[0].path, { sha256: sharedSha, size: sharedBody.length })),
+      JSON.stringify(directLinks),
+    );
   } finally {
     const failed = checks.filter((item) => !item.ok);
     console.log(

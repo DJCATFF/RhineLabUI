@@ -452,19 +452,23 @@ export async function registerImport(options: {
         continue;
       }
       const known = db
-        .prepare("SELECT storage_kind, path FROM files WHERE sha256 = ? AND size = ? LIMIT 1")
-        .get(file.sha256, file.size) as { storage_kind: string; path: string } | undefined;
+        .prepare("SELECT path FROM files WHERE sha256 = ? AND size = ? AND storage_kind = 'managed' LIMIT 1")
+        .get(file.sha256, file.size) as { path: string } | undefined;
       if (known) {
         seen.add(digest);
         duplicates += 1;
-        if (known.storage_kind === "managed" && !(await originalIntact(known.path, file))) {
+        if (!(await originalIntact(known.path, file))) {
           try {
             const stored = await saveOriginal(file.path, { sha256: file.sha256, size: file.size });
             if (stored.created) copied.push(stored.path);
-            if (stored.path !== known.path && known.path.startsWith(originalsDir())) {
-              await rm(known.path, { force: true });
+            if (stored.path !== known.path) {
+              // 只有确认没有其他资料引用旧路径时才删除，避免误删共享原件。
+              db.prepare("UPDATE files SET path = ? WHERE path = ?").run(stored.path, known.path);
+              const refs = db.prepare("SELECT COUNT(*) AS n FROM files WHERE path = ?").get(known.path) as { n: number };
+              if (refs.n === 0 && known.path.startsWith(originalsDir())) {
+                await rm(known.path, { force: true });
+              }
             }
-            db.prepare("UPDATE files SET path = ? WHERE path = ?").run(stored.path, known.path);
             repaired += 1;
           } catch {
             failed += 1;

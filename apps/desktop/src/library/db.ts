@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS files (
   size INTEGER NOT NULL,
   sha256 TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  UNIQUE (sha256, size)
+  UNIQUE (resource_id, sha256, size)
 );
 
 CREATE TABLE IF NOT EXISTS collections (
@@ -113,6 +113,43 @@ export function libraryPath(): string {
   return path.join(app.getPath("userData"), "rhine", "library.db");
 }
 
+/**
+ * 旧版资料表的唯一约束是 (sha256, size)，同一份内容只能挂在一个资料上。
+ * 多个旧库条目可能共享同一份原件，因此改为按资料去重；已有库在这里重建表。
+ */
+function allowSharedOriginals(handle: DatabaseSync): void {
+  const table = handle.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'files'").get() as
+    | { sql: string }
+    | undefined;
+  if (!table?.sql.includes("UNIQUE (sha256, size)")) return;
+  handle.exec("BEGIN");
+  try {
+    handle.exec(`
+CREATE TABLE files_next (
+  id TEXT PRIMARY KEY,
+  resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+  storage_kind TEXT NOT NULL,
+  path TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  ext TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (resource_id, sha256, size)
+);
+INSERT INTO files_next (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
+  SELECT id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at FROM files;
+DROP TABLE files;
+ALTER TABLE files_next RENAME TO files;
+CREATE INDEX IF NOT EXISTS files_resource_idx ON files (resource_id);
+`);
+    handle.exec("COMMIT");
+  } catch (error) {
+    handle.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 export function openLibrary(): DatabaseSync {
   if (db) return db;
   const file = libraryPath();
@@ -125,13 +162,14 @@ export function openLibrary(): DatabaseSync {
   if (!columns.some((column) => column.name === "key_points")) {
     db.exec("ALTER TABLE resources ADD COLUMN key_points TEXT;");
   }
+  allowSharedOriginals(db);
   const version = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
     | { value: string }
     | undefined;
   if (!version) {
-    db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '2')").run();
-  } else if (Number(version.value) < 2) {
-    db.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run();
+    db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '3')").run();
+  } else if (Number(version.value) < 3) {
+    db.prepare("UPDATE meta SET value = '3' WHERE key = 'schema_version'").run();
   }
   return db;
 }
