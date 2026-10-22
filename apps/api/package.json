@@ -18,7 +18,8 @@
     "verify": "node scripts/verify.mjs",
     "verify:extraction": "node scripts/verify-extraction.mjs",
     "verify:storage": "node scripts/verify-storage.mjs",
-    "verify:recovery": "node scripts/verify-recovery.mjs"
+    "verify:recovery": "node scripts/verify-recovery.mjs",
+    "export:legacy": "node scripts/export-legacy.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",

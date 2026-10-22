@@ -1,5 +1,12 @@
 import { HttpException } from '@nestjs/common';
 
+export const PDF_SIGNATURE = Buffer.from('%PDF-');
+
+/** A PDF original must carry the %PDF- header at offset 0, not merely somewhere in the file. */
+export function isPdfSignature(header: Buffer) {
+  return header.subarray(0, PDF_SIGNATURE.length).equals(PDF_SIGNATURE);
+}
+
 export class FileRangeError extends HttpException {
   constructor(readonly size: number) {
     super('Requested range is not satisfiable', 416);

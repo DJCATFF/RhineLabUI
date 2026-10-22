@@ -4,6 +4,7 @@ const { Readable } = require('node:stream');
 const { createHash } = require('node:crypto');
 const { createServer } = require('node:http');
 const { ExtractionService } = require('../dist/worker/extraction.service');
+const { EnrichmentService } = require('../dist/worker/enrichment.service');
 
 async function setup(t, handler) {
   const server = createServer(handler);
@@ -50,9 +51,16 @@ async function setup(t, handler) {
       },
     },
   };
-  const service = new ExtractionService(prisma, infra, {
+  const config = {
     getOrThrow: () => `http://127.0.0.1:${server.address().port}`,
-  });
+    get: () => undefined,
+  };
+  const service = new ExtractionService(
+    prisma,
+    infra,
+    config,
+    new EnrichmentService(config),
+  );
   const job = {
     name: 'extract-text',
     data: { documentId: 'doc', objectKey: 'untrusted' },

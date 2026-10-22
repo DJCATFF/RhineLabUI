@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { addAbortSignal } from 'node:stream';
 import { PrismaService } from '../prisma/prisma.service';
 import { InfrastructureService } from '../documents/infrastructure.service';
+import { EnrichmentService } from './enrichment.service';
 
 const MAX_INPUT = 20 * 1024 * 1024;
 const MAX_TEXT = 2 * 1024 * 1024;
@@ -15,6 +16,7 @@ export class ExtractionService {
     private readonly prisma: PrismaService,
     private readonly infra: InfrastructureService,
     private readonly config: ConfigService,
+    private readonly enrichment: EnrichmentService,
   ) {}
 
   async reconcileFailures() {
@@ -102,9 +104,28 @@ export class ExtractionService {
       const text = Buffer.concat(output)
         .toString('utf8')
         .replace(/\u0000/g, '');
+      // Enrichment is optional: an unset LLM_* config or a failed call must not
+      // hold back the extracted text, so the document still becomes ready.
+      const enriched = await this.enrichment.refine(text);
       await this.prisma.document.update({
         where: { id: document.id },
-        data: { text, status: 'ready', extractionError: null, extractedAt: new Date() },
+        data: {
+          text,
+          status: 'ready',
+          extractionError: null,
+          extractedAt: new Date(),
+          ...(enriched?.refinement
+            ? {
+                summary: enriched.refinement.summary,
+                keyPoints: enriched.refinement.keyPoints,
+                tags: enriched.refinement.tags,
+                category: enriched.refinement.category,
+                enrichedAt: new Date(),
+                enrichmentError: null,
+              }
+            : {}),
+          ...(enriched?.error ? { enrichmentError: enriched.error } : {}),
+        },
       });
     } catch (error) {
       // Never expose response bodies, connection strings or original text in errors.

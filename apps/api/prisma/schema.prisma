@@ -22,6 +22,12 @@ model Document {
   extractionError String?
   extractionAttempts Int @default(0)
   extractedAt DateTime?
+  summary   String?  @db.Text
+  keyPoints String[] @default([])
+  tags      String[] @default([])
+  category  String?
+  enrichedAt DateTime?
+  enrichmentError String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

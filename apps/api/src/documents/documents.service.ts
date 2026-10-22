@@ -10,7 +10,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { InfrastructureService } from './infrastructure.service';
-import { fileRange, fileDisposition } from './file-response';
+import { fileRange, fileDisposition, isPdfSignature, PDF_SIGNATURE } from './file-response';
 
 @Injectable()
 export class DocumentsService implements OnModuleInit, OnModuleDestroy {
@@ -29,13 +29,16 @@ export class DocumentsService implements OnModuleInit, OnModuleDestroy {
     if (after && (typeof after !== 'string' || after.length > 100))
       throw new BadRequestException('Invalid cursor.');
     const q = query?.trim();
+    // Prisma parameterizes this operand, but PostgreSQL still reads % and _ inside it as
+    // wildcards. Escape them (with backslash, the default LIKE escape) to search literally.
+    const escaped = q?.replace(/[\\%_]/g, '\\$&');
     return this.prisma.document.findMany({
-      where: q
+      where: escaped
         ? {
             OR: [
-              { fileName: { contains: q, mode: 'insensitive' } },
-              { title: { contains: q, mode: 'insensitive' } },
-              { text: { contains: q, mode: 'insensitive' } },
+              { fileName: { contains: escaped, mode: 'insensitive' } },
+              { title: { contains: escaped, mode: 'insensitive' } },
+              { text: { contains: escaped, mode: 'insensitive' } },
             ],
           }
         : undefined,
@@ -52,19 +55,11 @@ export class DocumentsService implements OnModuleInit, OnModuleDestroy {
     const portion = fileRange(range, document.size);
     try {
       if (inline) {
-        const header = await this.infra.storage.getPartialObject(
-          this.infra.bucket,
-          document.objectKey,
-          0,
-          Math.min(document.size, 1024),
-        );
-        const parts: Buffer[] = [];
-        for await (const chunk of header) parts.push(Buffer.from(chunk));
-        if (!Buffer.concat(parts).subarray(0, 1024).includes(Buffer.from('%PDF-'))) {
+        const signature = await this.readSignature(document.objectKey, document.size);
+        if (!isPdfSignature(signature))
           throw new BadRequestException(
             'Only PDF originals can be previewed. Download this file instead.',
           );
-        }
       }
       const stream = await this.infra.storage.getPartialObject(
         this.infra.bucket,
@@ -88,7 +83,30 @@ export class DocumentsService implements OnModuleInit, OnModuleDestroy {
   async findOne(id: string) {
     const document = await this.prisma.document.findUnique({ where: { id } });
     if (!document) throw new NotFoundException('Document not found.');
-    return document;
+    // The content signature is the single authority for preview eligibility; the front end
+    // only hides or shows the viewer link from this flag.
+    return { ...document, previewable: await this.previewable(document) };
+  }
+
+  private async readSignature(objectKey: string, size: number) {
+    const stream = await this.infra.storage.getPartialObject(
+      this.infra.bucket,
+      objectKey,
+      0,
+      Math.min(size, PDF_SIGNATURE.length),
+    );
+    const parts: Buffer[] = [];
+    for await (const chunk of stream) parts.push(Buffer.from(chunk));
+    return Buffer.concat(parts);
+  }
+
+  private async previewable(document: { objectKey: string; size: number }) {
+    try {
+      return isPdfSignature(await this.readSignature(document.objectKey, document.size));
+    } catch {
+      this.logger.warn(`Preview capability unknown for ${document.objectKey}; hiding the viewer.`);
+      return false;
+    }
   }
 
   async upload(file?: Express.Multer.File) {

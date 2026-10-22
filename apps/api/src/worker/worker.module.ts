@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from '../prisma/prisma.module';
 import { InfrastructureService } from '../documents/infrastructure.service';
+import { EnrichmentService } from './enrichment.service';
 import { ExtractionService } from './extraction.service';
 import { WorkerService } from './worker.service';
 
@@ -10,6 +11,6 @@ import { WorkerService } from './worker.service';
     ConfigModule.forRoot({ isGlobal: true, envFilePath: ['../../.env', '.env'] }),
     PrismaModule,
   ],
-  providers: [InfrastructureService, ExtractionService, WorkerService],
+  providers: [InfrastructureService, EnrichmentService, ExtractionService, WorkerService],
 })
 export class WorkerModule {}
