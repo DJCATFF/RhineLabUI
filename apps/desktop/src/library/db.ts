@@ -1,0 +1,153 @@
+import { DatabaseSync } from "node:sqlite";
+import { app } from "electron";
+import { mkdirSync } from "node:fs";
+import * as path from "node:path";
+
+let db: DatabaseSync | null = null;
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS counters (
+  key TEXT PRIMARY KEY,
+  value INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS sources (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  label TEXT NOT NULL,
+  root_path TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS resources (
+  id TEXT PRIMARY KEY,
+  archive_no INTEGER NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ready',
+  favorite INTEGER NOT NULL DEFAULT 0,
+  note TEXT,
+  extracted TEXT,
+  summary TEXT,
+  key_points TEXT,
+  source_id TEXT REFERENCES sources(id) ON DELETE SET NULL,
+  inbox INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  opened_at TEXT,
+  deleted_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS files (
+  id TEXT PRIMARY KEY,
+  resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+  storage_kind TEXT NOT NULL,
+  path TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  ext TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (sha256, size)
+);
+
+CREATE TABLE IF NOT EXISTS collections (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS collection_resources (
+  collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+  resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+  PRIMARY KEY (collection_id, resource_id)
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS resource_tags (
+  resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+  tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+  origin TEXT NOT NULL DEFAULT 'user',
+  PRIMARY KEY (resource_id, tag_id)
+);
+
+CREATE TABLE IF NOT EXISTS reading_states (
+  resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+  locator TEXT NOT NULL,
+  progress REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+  id TEXT PRIMARY KEY,
+  resource_id TEXT REFERENCES resources(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  lease_until TEXT,
+  error TEXT,
+  payload TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS resources_status_idx ON resources (deleted_at, created_at);
+CREATE INDEX IF NOT EXISTS resources_kind_idx ON resources (kind);
+CREATE INDEX IF NOT EXISTS files_resource_idx ON files (resource_id);
+CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs (status, created_at);
+`;
+
+export function libraryPath(): string {
+  return path.join(app.getPath("userData"), "rhine", "library.db");
+}
+
+export function openLibrary(): DatabaseSync {
+  if (db) return db;
+  const file = libraryPath();
+  mkdirSync(path.dirname(file), { recursive: true });
+  db = new DatabaseSync(file);
+  db.exec("PRAGMA journal_mode = WAL;");
+  db.exec("PRAGMA foreign_keys = ON;");
+  db.exec(SCHEMA);
+  const columns = db.prepare("PRAGMA table_info(resources)").all() as { name: string }[];
+  if (!columns.some((column) => column.name === "key_points")) {
+    db.exec("ALTER TABLE resources ADD COLUMN key_points TEXT;");
+  }
+  const version = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
+    | { value: string }
+    | undefined;
+  if (!version) {
+    db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '2')").run();
+  } else if (Number(version.value) < 2) {
+    db.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run();
+  }
+  return db;
+}
+
+export function closeLibrary(): void {
+  db?.close();
+  db = null;
+}
+
+export function nextArchiveNo(): number {
+  const handle = openLibrary();
+  handle.prepare("INSERT INTO counters (key, value) VALUES ('archive_no', 1) ON CONFLICT(key) DO UPDATE SET value = value + 1").run();
+  const row = handle.prepare("SELECT value FROM counters WHERE key = 'archive_no'").get() as { value: number };
+  return row.value;
+}
+
+export function nowIso(): string {
+  return new Date().toISOString();
+}

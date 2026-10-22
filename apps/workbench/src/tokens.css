@@ -1,0 +1,18 @@
+:root {
+  --surface-sunken: #f4f1ec;
+  --surface-panel: #fbf9f6;
+  --surface-raised: #ffffff;
+  --line: #e2dcd3;
+  --line-strong: #cfc7bb;
+  --text-strong: #232120;
+  --text: #3d3936;
+  --text-muted: #7b736b;
+  --accent: #2f7d6d;
+  --accent-soft: #e3efeb;
+  --danger: #a5463c;
+  --warning: #9a6b2f;
+  --radius: 8px;
+  --font-ui: "MiSans", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", "JetBrains Mono", monospace;
+  --shadow-panel: 0 1px 2px rgba(45, 42, 38, 0.06), 0 8px 24px rgba(45, 42, 38, 0.05);
+}

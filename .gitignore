@@ -27,6 +27,10 @@ public/fonts/novecento/
 .vercel/
 .wrangler/
 
+# Verification run logs
+verification/*.log
+verification/*.log.err
+
 # APEX backend (per docs/ARCHITECTURE.md)
 uploads/
 storage/

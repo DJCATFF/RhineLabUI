@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'" />
+  <title>Rhine Lab Desk · 技术验证</title>
+  <style>
+    :root {
+      --bg: #f4f1ec;
+      --panel: #fbf9f6;
+      --line: #ddd6cb;
+      --ink: #2c2a27;
+      --muted: #7a746c;
+      --accent: #2f7d6d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 13px/1.6 "MiSans", "Microsoft YaHei", system-ui, sans-serif;
+      padding: 28px 32px;
+    }
+    h1 { font-size: 17px; font-weight: 600; margin: 0 0 4px; letter-spacing: .02em; }
+    p.hint { margin: 0 0 22px; color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      padding: 16px 18px;
+    }
+    h2 { font-size: 12px; font-weight: 600; letter-spacing: .08em; color: var(--muted); margin: 0 0 12px; text-transform: uppercase; }
+    button {
+      font: inherit; color: var(--ink); background: #fff;
+      border: 1px solid var(--line); border-radius: 2px;
+      padding: 6px 12px; cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    pre {
+      margin: 12px 0 0; padding: 10px 12px; background: #f0ece5;
+      border-radius: 2px; white-space: pre-wrap; word-break: break-all;
+      font: 11.5px/1.55 "Cascadia Mono", Consolas, monospace; color: #45423d;
+      max-height: 210px; overflow: auto;
+    }
+    .ok { color: var(--accent); }
+    ol { margin: 0; padding-left: 18px; color: var(--muted); }
+    ol li { margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <h1>Rhine Lab Desk</h1>
+  <p class="hint">阶段①技术验证：窗口、文件系统、哈希、独立工作进程、系统打开。验证完毕后此页面将被新工作台替换。</p>
+
+  <div class="grid">
+    <section>
+      <h2>01 目录访问</h2>
+      <button id="pick">选择文件夹并扫描</button>
+      <pre id="scan-out">等待操作</pre>
+    </section>
+    <section>
+      <h2>02 流式哈希</h2>
+      <button id="hash">对样本文件计算 SHA-256</button>
+      <pre id="hash-out">等待操作</pre>
+    </section>
+    <section>
+      <h2>03 独立工作进程</h2>
+      <button id="worker">启动 utilityProcess</button>
+      <pre id="worker-out">等待操作</pre>
+    </section>
+    <section>
+      <h2>04 验证清单</h2>
+      <ol>
+        <li>窗口可开、可缩放，最小尺寸生效</li>
+        <li>单实例：再次启动会聚焦当前窗口</li>
+        <li>目录扫描不阻塞界面</li>
+        <li>大文件哈希走流式，内存平稳</li>
+        <li>工作进程崩溃不影响主窗口</li>
+      </ol>
+    </section>
+  </div>
+
+  <script>
+    const scanOut = document.getElementById("scan-out");
+    const hashOut = document.getElementById("hash-out");
+    const workerOut = document.getElementById("worker-out");
+    let firstFile = null;
+
+    const show = (el, value) => {
+      el.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    };
+
+    document.getElementById("pick").addEventListener("click", async () => {
+      try {
+        const folder = await window.desk.pickFolder();
+        if (!folder) return show(scanOut, "已取消");
+        show(scanOut, "扫描中…\n" + folder);
+        const result = await window.desk.scan(folder);
+        show(scanOut, { folder, ...result });
+        firstFile = result.sample.length ? folder + "\\" + result.sample[0].relativePath : null;
+      } catch (error) {
+        show(scanOut, "失败：" + error.message);
+      }
+    });
+
+    document.getElementById("hash").addEventListener("click", async () => {
+      if (!firstFile) return show(hashOut, "请先扫描一个文件夹");
+      try {
+        show(hashOut, "计算中…\n" + firstFile);
+        show(hashOut, { file: firstFile, ...(await window.desk.hash(firstFile)) });
+      } catch (error) {
+        show(hashOut, "失败：" + error.message);
+      }
+    });
+
+    document.getElementById("worker").addEventListener("click", async () => {
+      try {
+        show(workerOut, await window.desk.worker());
+      } catch (error) {
+        show(workerOut, "失败：" + error.message);
+      }
+    });
+  </script>
+</body>
+</html>

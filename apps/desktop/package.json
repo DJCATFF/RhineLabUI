@@ -1,0 +1,39 @@
+{
+  "name": "rhine-desk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Rhine Lab 本地资源管理工作台（桌面宿主）",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run build && electron .",
+    "pack": "npm run build && electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.9.3"
+  },
+  "build": {
+    "appId": "cc.lubeiluchen.rhine.desk",
+    "productName": "Rhine Lab Desk",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "src/index.html"
+    ],
+    "extraResources": [
+      {
+        "from": "../workbench/dist",
+        "to": "workbench/dist"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  }
+}
