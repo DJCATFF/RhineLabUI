@@ -110,6 +110,26 @@ export async function runLibraryRegression(): Promise<void> {
     );
     check("先正文：建立旧库来源", one("SELECT COUNT(*) AS n FROM sources") === legacySources + 1);
 
+    // 补齐失败：随包原件路径不存在时，不能因为已有占位记录就报告无需待补。
+    const missing = path.join(legacyDir, "missing.json");
+    await writeFile(
+      missing,
+      JSON.stringify({
+        version: 2,
+        documents: [{ ...document, localFile: path.join("missing.originals", `${documentId}.txt`) }],
+      }),
+    );
+    const missingBackfill = await importLegacyExport(missing);
+    check(
+      "补齐失败：仍计入待补且不算跳过",
+      missingBackfill.filesPending === 1 && missingBackfill.skipped === 0 && missingBackfill.backfilled === 0,
+      JSON.stringify(missingBackfill),
+    );
+    const placeholder = db
+      .prepare("SELECT storage_kind FROM files WHERE resource_id = ? LIMIT 1")
+      .get(documentId) as { storage_kind: string };
+    check("补齐失败：文件记录仍是占位", placeholder.storage_kind === "legacy");
+
     const bundleOriginals = path.join(legacyDir, "full.originals");
     await mkdir(bundleOriginals, { recursive: true });
     await writeFile(path.join(bundleOriginals, `${documentId}.txt`), legacyBody);
@@ -144,6 +164,26 @@ export async function runLibraryRegression(): Promise<void> {
       "补齐后重复导入：backfilled 0、skipped 1",
       again.backfilled === 0 && again.skipped === 1,
       JSON.stringify(again),
+    );
+
+    // 已存在的托管副本损坏时同样计入待补；重新补齐后恢复并清零。
+    await writeFile(fileRow.path, Buffer.alloc(legacyBody.length, 0x59));
+    check(
+      "副本损坏：前置条件为不可读",
+      !(await originalIntact(fileRow.path, { sha256: legacySha, size: legacyBody.length })),
+    );
+    const withoutOriginal = await importLegacyExport(textOnly);
+    check(
+      "副本损坏：无随包原件时计入待补",
+      withoutOriginal.filesPending === 1 && withoutOriginal.skipped === 0,
+      JSON.stringify(withoutOriginal),
+    );
+    const repaired = await importLegacyExport(full);
+    check(
+      "副本损坏：重新补齐后恢复且不再待补",
+      repaired.filesPending === 0 &&
+        (await originalIntact(fileRow.path, { sha256: legacySha, size: legacyBody.length })),
+      JSON.stringify(repaired),
     );
 
     // 5. 两个旧库条目共享同一份原件：各自关联，物理副本只有一份。

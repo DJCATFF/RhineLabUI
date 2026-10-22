@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { openLibrary, nowIso } from "./db";
 import { kindOf } from "./importer";
-import { discardOriginals, saveOriginal, type StoredOriginal } from "./originals";
+import { discardOriginals, originalIntact, saveOriginal, type StoredOriginal } from "./originals";
 import { createCollection } from "./store";
 
 export interface LegacyDocument {
@@ -64,11 +64,13 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
 
   // 只为确实会写入的资料复制原件，避免给重复/冲突记录留下孤儿副本。
   const plans = new Map<string, "new" | "backfill">();
+  const existingIds = new Set<string>();
   for (const doc of documents) {
     const id = typeof doc.id === "string" ? doc.id.trim() : "";
     const archiveNo = Number(doc.archiveNumber);
     if (!id || !Number.isInteger(archiveNo) || archiveNo <= 0 || plans.has(id)) continue;
     if (db.prepare("SELECT id FROM resources WHERE id = ?").get(id)) {
+      existingIds.add(id);
       if (doc.localFile) plans.set(id, "backfill");
       continue;
     }
@@ -89,6 +91,23 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
     } catch {
       // 原件缺失或校验失败：保留元数据与正文，计入 filesPending。
     }
+  }
+
+  // 已存在的资料：只有挂着可读取的托管原件才算跳过；
+  // 旧库占位记录或副本缺失、损坏时仍须如实计入待补。
+  const missingOriginals = new Set<string>();
+  for (const id of existingIds) {
+    if (stored.has(id)) continue;
+    const existing = db
+      .prepare("SELECT id, storage_kind, path, sha256, size FROM files WHERE resource_id = ? LIMIT 1")
+      .get(id) as ExistingFile | undefined;
+    const readable =
+      existing?.storage_kind === "managed" &&
+      (await originalIntact(existing.path, {
+        sha256: existing.sha256 || undefined,
+        size: existing.size || undefined,
+      }));
+    if (!readable) missingOriginals.add(id);
   }
 
   const stamp = nowIso();
@@ -175,9 +194,9 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
       if (plan === "backfill") {
         const saved = stored.get(id);
         if (!saved) {
-          const linked = db.prepare("SELECT id FROM files WHERE resource_id = ? LIMIT 1").get(id);
-          if (linked) result.skipped += 1;
-          else result.filesPending += 1;
+          // 本次未能复制原件：已有占位记录或副本不可读时仍计入待补。
+          if (missingOriginals.has(id)) result.filesPending += 1;
+          else result.skipped += 1;
           continue;
         }
         if (attachOriginal(id, doc, saved) === "attached") result.backfilled += 1;
@@ -185,8 +204,10 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
         continue;
       }
       if (plan !== "new") {
-        if (db.prepare("SELECT id FROM resources WHERE id = ?").get(id)) result.skipped += 1;
-        else result.conflicts += 1;
+        if (db.prepare("SELECT id FROM resources WHERE id = ?").get(id)) {
+          if (missingOriginals.has(id)) result.filesPending += 1;
+          else result.skipped += 1;
+        } else result.conflicts += 1;
         continue;
       }
 
