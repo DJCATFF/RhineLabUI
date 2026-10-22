@@ -124,7 +124,7 @@ export async function importFolder(root: string, onProgress: (progress: ImportPr
   }
 
   onProgress({ phase: "save", index: paths.length, total: paths.length });
-  const result = registerImport({
+  const result = await registerImport({
     sourceLabel: path.basename(root) || root,
     rootPath: root,
     files: incoming,
@@ -136,7 +136,7 @@ export async function importFolder(root: string, onProgress: (progress: ImportPr
     total: paths.length,
     added: result.added,
     duplicates: result.duplicates,
-    skipped,
+    skipped: skipped + result.failed,
     elapsedMs: Date.now() - started,
   };
   onProgress(summary);

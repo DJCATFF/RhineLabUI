@@ -1,4 +1,5 @@
 import { openLibrary, nextArchiveNo, nowIso } from "./db";
+import { discardOriginals, saveOriginal, type StoredOriginal } from "./originals";
 import { randomUUID } from "node:crypto";
 
 export type ViewKind = "all" | "inbox" | "recent" | "favorite" | "collection" | "tag" | "source" | "trash";
@@ -415,56 +416,80 @@ interface IncomingFile {
   title: string;
 }
 
-export function registerImport(options: {
+/**
+ * 登记导入：先把原件复制进资料库托管目录并校验，再在一个事务里写入清单。
+ * 复制失败的文件不登记，计入 failed；事务回滚时删除本次新建的副本。
+ */
+export async function registerImport(options: {
   sourceLabel: string;
   rootPath: string;
   files: IncomingFile[];
-}): { sourceId: string; added: number; duplicates: number; ids: string[] } {
+}): Promise<{ sourceId: string; added: number; duplicates: number; failed: number; ids: string[] }> {
   const db = openLibrary();
   const sourceId = randomUUID();
   const stamp = nowIso();
 
-  db.exec("BEGIN");
+  const prepared: { file: IncomingFile; stored: StoredOriginal }[] = [];
+  const copied: string[] = [];
+  const seen = new Set<string>();
+  let duplicates = 0;
+  let failed = 0;
+
   try {
-    db.prepare("INSERT INTO sources (id, kind, label, root_path, created_at) VALUES (?, 'folder', ?, ?, ?)").run(
-      sourceId,
-      options.sourceLabel,
-      options.rootPath,
-      stamp,
-    );
-
-    let added = 0;
-    let duplicates = 0;
-    const ids: string[] = [];
-
     for (const file of options.files) {
-      const existing = db
-        .prepare(
-          `SELECT f.resource_id AS id FROM files f JOIN resources r ON r.id = f.resource_id
-           WHERE f.sha256 = ? AND f.size = ? AND r.deleted_at IS NULL LIMIT 1`,
-        )
-        .get(file.sha256, file.size) as { id: string } | undefined;
-      if (existing) {
+      const digest = `${file.sha256}:${file.size}`;
+      const known =
+        seen.has(digest) ||
+        Boolean(
+          db.prepare("SELECT id FROM files WHERE sha256 = ? AND size = ? LIMIT 1").get(file.sha256, file.size),
+        );
+      if (known) {
         duplicates += 1;
         continue;
       }
-      const resourceId = randomUUID();
-      db.prepare(
-        `INSERT INTO resources (id, archive_no, title, kind, status, favorite, inbox, source_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'ready', 0, 1, ?, ?, ?)`,
-      ).run(resourceId, nextArchiveNo(), file.title, file.kind, sourceId, stamp, stamp);
-      db.prepare(
-        `INSERT INTO files (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
-         VALUES (?, ?, 'reference', ?, ?, ?, ?, ?, ?)`,
-      ).run(randomUUID(), resourceId, file.path, file.mimeType, file.ext, file.size, file.sha256, stamp);
-      added += 1;
-      ids.push(resourceId);
+      seen.add(digest);
+      let stored: StoredOriginal;
+      try {
+        stored = await saveOriginal(file.path, { sha256: file.sha256, size: file.size });
+      } catch {
+        failed += 1;
+        continue;
+      }
+      if (stored.created) copied.push(stored.path);
+      prepared.push({ file, stored });
     }
 
-    db.exec("COMMIT");
-    return { sourceId, added, duplicates, ids };
+    db.exec("BEGIN");
+    try {
+      db.prepare("INSERT INTO sources (id, kind, label, root_path, created_at) VALUES (?, 'folder', ?, ?, ?)").run(
+        sourceId,
+        options.sourceLabel,
+        options.rootPath,
+        stamp,
+      );
+
+      const ids: string[] = [];
+      for (const { file, stored } of prepared) {
+        const resourceId = randomUUID();
+        db.prepare(
+          `INSERT INTO resources (id, archive_no, title, kind, status, favorite, inbox, source_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'ready', 0, 1, ?, ?, ?)`,
+        ).run(resourceId, nextArchiveNo(), file.title, file.kind, sourceId, stamp, stamp);
+        db.prepare(
+          `INSERT INTO files (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
+           VALUES (?, ?, 'managed', ?, ?, ?, ?, ?, ?)`,
+        ).run(randomUUID(), resourceId, stored.path, file.mimeType, file.ext, stored.size, stored.sha256, stamp);
+        ids.push(resourceId);
+      }
+
+      db.exec("COMMIT");
+      return { sourceId, added: ids.length, duplicates, failed, ids };
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   } catch (error) {
-    db.exec("ROLLBACK");
+    await discardOriginals(copied);
     throw error;
   }
 }

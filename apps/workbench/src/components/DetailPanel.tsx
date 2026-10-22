@@ -282,6 +282,9 @@ export function DetailPanel(props: DetailPanelProps) {
             {detail.files[0] && detail.files[0].storage_kind === "reference" && (
               <p className="source-note">引用来源：原件保留在原文件夹，软件只保存路径与索引。</p>
             )}
+            {detail.files[0] && detail.files[0].storage_kind === "managed" && (
+              <p className="source-note">托管导入：原件已复制到资料库目录，原文件夹移动或删除后仍可阅读。</p>
+            )}
           </div>
         </section>
 

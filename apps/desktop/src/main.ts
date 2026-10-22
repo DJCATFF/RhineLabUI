@@ -85,7 +85,7 @@ if (!app.requestSingleInstanceLock()) {
     if (shot || importRoot || legacyFile) {
       openLibrary();
       if (legacyFile) {
-        const result = importLegacyExport(legacyFile.slice("--import-legacy=".length));
+        const result = await importLegacyExport(legacyFile.slice("--import-legacy=".length));
         console.log("LEGACY_IMPORT_RESULT " + JSON.stringify(result));
       }
       if (importRoot) {

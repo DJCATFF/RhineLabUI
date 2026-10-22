@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { openLibrary, nowIso } from "./db";
 import { kindOf } from "./importer";
+import { discardOriginals, saveOriginal, type StoredOriginal } from "./originals";
 import { createCollection } from "./store";
 
 export interface LegacyDocument {
@@ -14,6 +15,8 @@ export interface LegacyDocument {
   size: number;
   objectKey: string;
   sha256: string;
+  /** 导出时一并下载的原件路径，相对导出 JSON 所在目录。 */
+  localFile?: string | null;
   text?: string | null;
   summary?: string | null;
   keyPoints?: string[];
@@ -29,20 +32,51 @@ export interface LegacyImportResult {
   conflicts: number;
   tags: number;
   collections: number;
+  /** 原件未随导出包提供、只登记了元数据的资料数。 */
   filesPending: number;
 }
 
 /**
  * 导入旧版 PostgreSQL 文档导出（apps/api/scripts/export-legacy.mjs 生成）。
  * 保留原文档 ID 与 archiveNumber；标签进入关联表，要点保存为 JSON，
- * category 转为集合；原件字节需后续从 MinIO 恢复。
+ * category 转为集合；导出包内附带的原件走与普通导入相同的复制校验流程。
  */
-export function importLegacyExport(file: string): LegacyImportResult {
+export async function importLegacyExport(file: string): Promise<LegacyImportResult> {
   const parsed = JSON.parse(readFileSync(file, "utf8")) as { documents?: LegacyDocument[] } | LegacyDocument[];
   const documents = Array.isArray(parsed) ? parsed : parsed.documents;
   if (!Array.isArray(documents)) throw new Error("旧资料导出缺少 documents 数组");
 
   const db = openLibrary();
+  const baseDir = path.dirname(path.resolve(file));
+  const stored = new Map<string, StoredOriginal>();
+  const copied: string[] = [];
+
+  // 只为确实会写入的资料复制原件，避免给重复/冲突记录留下孤儿副本。
+  const eligible = new Set<string>();
+  for (const doc of documents) {
+    const id = typeof doc.id === "string" ? doc.id.trim() : "";
+    const archiveNo = Number(doc.archiveNumber);
+    if (!id || !Number.isInteger(archiveNo) || archiveNo <= 0 || eligible.has(id)) continue;
+    if (db.prepare("SELECT id FROM resources WHERE id = ?").get(id)) continue;
+    if (db.prepare("SELECT id FROM resources WHERE archive_no = ?").get(archiveNo)) continue;
+    eligible.add(id);
+  }
+
+  for (const doc of documents) {
+    const documentId = typeof doc.id === "string" ? doc.id.trim() : "";
+    if (!doc.localFile || !documentId || !eligible.has(documentId)) continue;
+    try {
+      const saved = await saveOriginal(path.resolve(baseDir, doc.localFile), {
+        sha256: doc.sha256 || undefined,
+        size: Number(doc.size) || undefined,
+      });
+      if (saved.created) copied.push(saved.path);
+      stored.set(documentId, saved);
+    } catch {
+      // 原件缺失或校验失败：保留元数据与正文，计入 filesPending。
+    }
+  }
+
   const stamp = nowIso();
   const sourceId = randomUUID();
   const result: LegacyImportResult = {
@@ -102,7 +136,25 @@ export function importLegacyExport(file: string): LegacyImportResult {
         doc.updatedAt ?? stamp,
       );
 
-      if (fileName) {
+      const saved = stored.get(id);
+      if (saved) {
+        const known = db.prepare("SELECT id FROM files WHERE sha256 = ? AND size = ?").get(saved.sha256, saved.size);
+        if (!known) {
+          db.prepare(
+            `INSERT INTO files (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
+             VALUES (?, ?, 'managed', ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            randomUUID(),
+            id,
+            saved.path,
+            doc.mimeType || "application/octet-stream",
+            path.extname(doc.fileName || saved.path).toLowerCase(),
+            saved.size,
+            saved.sha256,
+            stamp,
+          );
+        }
+      } else if (fileName) {
         const sha256 = doc.sha256 ?? "";
         const size = Number(doc.size) || 0;
         const known = sha256
@@ -165,6 +217,7 @@ export function importLegacyExport(file: string): LegacyImportResult {
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
+    await discardOriginals(copied);
     throw error;
   }
 
