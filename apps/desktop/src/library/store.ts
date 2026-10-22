@@ -1,6 +1,7 @@
 import { openLibrary, nextArchiveNo, nowIso } from "./db";
-import { discardOriginals, saveOriginal, type StoredOriginal } from "./originals";
+import { discardOriginals, originalIntact, originalsDir, saveOriginal, type StoredOriginal } from "./originals";
 import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
 
 export type ViewKind = "all" | "inbox" | "recent" | "favorite" | "collection" | "tag" | "source" | "trash";
 export type SortKind = "added" | "title" | "size" | "recent";
@@ -419,14 +420,21 @@ interface IncomingFile {
 /**
  * 登记导入：先把原件复制进资料库托管目录并校验，再在一个事务里写入清单。
  * 复制失败的文件不登记，计入 failed；事务回滚时删除本次新建的副本。
+ * 全部文件重复时不新建来源；已有托管副本损坏时按同一摘要重新复制修复。
  */
 export async function registerImport(options: {
   sourceLabel: string;
   rootPath: string;
   files: IncomingFile[];
-}): Promise<{ sourceId: string; added: number; duplicates: number; failed: number; ids: string[] }> {
+}): Promise<{
+  sourceId: string | null;
+  added: number;
+  duplicates: number;
+  failed: number;
+  repaired: number;
+  ids: string[];
+}> {
   const db = openLibrary();
-  const sourceId = randomUUID();
   const stamp = nowIso();
 
   const prepared: { file: IncomingFile; stored: StoredOriginal }[] = [];
@@ -434,17 +442,34 @@ export async function registerImport(options: {
   const seen = new Set<string>();
   let duplicates = 0;
   let failed = 0;
+  let repaired = 0;
 
   try {
     for (const file of options.files) {
       const digest = `${file.sha256}:${file.size}`;
-      const known =
-        seen.has(digest) ||
-        Boolean(
-          db.prepare("SELECT id FROM files WHERE sha256 = ? AND size = ? LIMIT 1").get(file.sha256, file.size),
-        );
-      if (known) {
+      if (seen.has(digest)) {
         duplicates += 1;
+        continue;
+      }
+      const known = db
+        .prepare("SELECT storage_kind, path FROM files WHERE sha256 = ? AND size = ? LIMIT 1")
+        .get(file.sha256, file.size) as { storage_kind: string; path: string } | undefined;
+      if (known) {
+        seen.add(digest);
+        duplicates += 1;
+        if (known.storage_kind === "managed" && !(await originalIntact(known.path, file))) {
+          try {
+            const stored = await saveOriginal(file.path, { sha256: file.sha256, size: file.size });
+            if (stored.created) copied.push(stored.path);
+            if (stored.path !== known.path && known.path.startsWith(originalsDir())) {
+              await rm(known.path, { force: true });
+            }
+            db.prepare("UPDATE files SET path = ? WHERE path = ?").run(stored.path, known.path);
+            repaired += 1;
+          } catch {
+            failed += 1;
+          }
+        }
         continue;
       }
       seen.add(digest);
@@ -459,14 +484,24 @@ export async function registerImport(options: {
       prepared.push({ file, stored });
     }
 
+    if (prepared.length === 0) {
+      return { sourceId: null, added: 0, duplicates, failed, repaired, ids: [] };
+    }
+
     db.exec("BEGIN");
     try {
-      db.prepare("INSERT INTO sources (id, kind, label, root_path, created_at) VALUES (?, 'folder', ?, ?, ?)").run(
-        sourceId,
-        options.sourceLabel,
-        options.rootPath,
-        stamp,
-      );
+      const existingSource = db
+        .prepare("SELECT id FROM sources WHERE kind = 'folder' AND root_path = ? LIMIT 1")
+        .get(options.rootPath) as { id: string } | undefined;
+      const sourceId = existingSource?.id ?? randomUUID();
+      if (!existingSource) {
+        db.prepare("INSERT INTO sources (id, kind, label, root_path, created_at) VALUES (?, 'folder', ?, ?, ?)").run(
+          sourceId,
+          options.sourceLabel,
+          options.rootPath,
+          stamp,
+        );
+      }
 
       const ids: string[] = [];
       for (const { file, stored } of prepared) {
@@ -483,7 +518,7 @@ export async function registerImport(options: {
       }
 
       db.exec("COMMIT");
-      return { sourceId, added: ids.length, duplicates, failed, ids };
+      return { sourceId, added: ids.length, duplicates, failed, repaired, ids };
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;

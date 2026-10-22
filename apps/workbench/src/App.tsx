@@ -193,9 +193,11 @@ export function App() {
       await refreshLibrary();
       if (result.added) {
         const duplicated = result.duplicates ? `，跳过 ${result.duplicates} 个重复文件` : "";
-        setToast(`新增 ${result.added} 项资料${duplicated}`);
+        const fixed = result.repaired ? `，修复 ${result.repaired} 个损坏原件` : "";
+        setToast(`新增 ${result.added} 项资料${duplicated}${fixed}`);
       } else if (result.duplicates) {
-        setToast(`这些文件已登记过（${result.duplicates} 个重复），没有新增`);
+        const fixed = result.repaired ? `，已修复 ${result.repaired} 个损坏原件` : "";
+        setToast(`这些文件已登记过（${result.duplicates} 个重复），没有新增${fixed}`);
       } else {
         setToast("没有找到可导入的文件");
       }

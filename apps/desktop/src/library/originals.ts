@@ -23,6 +23,34 @@ function storedPath(sha256: string, ext: string): string {
   return path.join(originalsDir(), sha256.slice(0, 2), `${sha256}${ext.toLowerCase()}`);
 }
 
+async function digestFile(target: string): Promise<{ sha256: string; size: number } | null> {
+  const hash = createHash("sha256");
+  let size = 0;
+  try {
+    for await (const chunk of createReadStream(target, { highWaterMark: 1024 * 1024 })) {
+      const buffer = chunk as Buffer;
+      hash.update(buffer);
+      size += buffer.length;
+    }
+  } catch {
+    return null;
+  }
+  return { sha256: hash.digest("hex"), size };
+}
+
+/** 核对托管副本是否完整：缺失、大小不符或摘要不符都表示需要重新复制。 */
+export async function originalIntact(
+  target: string,
+  expected: { sha256?: string; size?: number },
+): Promise<boolean> {
+  const info = await stat(target).catch(() => null);
+  if (!info?.isFile()) return false;
+  if (expected.size !== undefined && info.size !== expected.size) return false;
+  if (!expected.sha256) return true;
+  const digest = await digestFile(target);
+  return digest?.sha256 === expected.sha256;
+}
+
 /**
  * 把源文件复制进资料库托管目录，并按 sha256/大小校验复制结果。
  * 校验不通过或复制中断时删除临时文件，不留下半个原件。
@@ -74,8 +102,15 @@ export async function saveOriginal(
 
   const target = storedPath(sha256, ext);
   await mkdir(path.dirname(target), { recursive: true });
-  if (await stat(target).then(() => true, () => false)) {
+  if (await originalIntact(target, { sha256, size })) {
     await unlink(temp).catch(() => {});
+    return { path: target, sha256, size, created: false };
+  }
+  // 目标位置已存在但内容不完整：用本次校验通过的临时文件替换，返回 created=false
+  // 以免事务回滚时把其他资料正在引用的同一份内容一并删除。
+  if (await stat(target).then(() => true, () => false)) {
+    await rm(target, { force: true });
+    await rename(temp, target);
     return { path: target, sha256, size, created: false };
   }
   await rename(temp, target);

@@ -34,12 +34,23 @@ export interface LegacyImportResult {
   collections: number;
   /** 原件未随导出包提供、只登记了元数据的资料数。 */
   filesPending: number;
+  /** 已存在的资料本次补齐了原件。 */
+  backfilled: number;
+}
+
+interface ExistingFile {
+  id: string;
+  storage_kind: string;
+  path: string;
+  sha256: string;
+  size: number;
 }
 
 /**
  * 导入旧版 PostgreSQL 文档导出（apps/api/scripts/export-legacy.mjs 生成）。
  * 保留原文档 ID 与 archiveNumber；标签进入关联表，要点保存为 JSON，
  * category 转为集合；导出包内附带的原件走与普通导入相同的复制校验流程。
+ * 已经在库中的资料如果此前只迁入了正文，本次会把随包原件补上。
  */
 export async function importLegacyExport(file: string): Promise<LegacyImportResult> {
   const parsed = JSON.parse(readFileSync(file, "utf8")) as { documents?: LegacyDocument[] } | LegacyDocument[];
@@ -52,19 +63,22 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
   const copied: string[] = [];
 
   // 只为确实会写入的资料复制原件，避免给重复/冲突记录留下孤儿副本。
-  const eligible = new Set<string>();
+  const plans = new Map<string, "new" | "backfill">();
   for (const doc of documents) {
     const id = typeof doc.id === "string" ? doc.id.trim() : "";
     const archiveNo = Number(doc.archiveNumber);
-    if (!id || !Number.isInteger(archiveNo) || archiveNo <= 0 || eligible.has(id)) continue;
-    if (db.prepare("SELECT id FROM resources WHERE id = ?").get(id)) continue;
+    if (!id || !Number.isInteger(archiveNo) || archiveNo <= 0 || plans.has(id)) continue;
+    if (db.prepare("SELECT id FROM resources WHERE id = ?").get(id)) {
+      if (doc.localFile) plans.set(id, "backfill");
+      continue;
+    }
     if (db.prepare("SELECT id FROM resources WHERE archive_no = ?").get(archiveNo)) continue;
-    eligible.add(id);
+    plans.set(id, "new");
   }
 
   for (const doc of documents) {
     const documentId = typeof doc.id === "string" ? doc.id.trim() : "";
-    if (!doc.localFile || !documentId || !eligible.has(documentId)) continue;
+    if (!doc.localFile || !documentId || !plans.has(documentId)) continue;
     try {
       const saved = await saveOriginal(path.resolve(baseDir, doc.localFile), {
         sha256: doc.sha256 || undefined,
@@ -78,7 +92,6 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
   }
 
   const stamp = nowIso();
-  const sourceId = randomUUID();
   const result: LegacyImportResult = {
     added: 0,
     skipped: 0,
@@ -86,18 +99,70 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
     tags: 0,
     collections: 0,
     filesPending: 0,
+    backfilled: 0,
   };
   const tagNames = new Set<string>();
   const collectionNames = new Set<string>();
   let maxArchiveNo = 0;
 
-  db.exec("BEGIN");
-  try {
-    db.prepare("INSERT INTO sources (id, kind, label, root_path, created_at) VALUES (?, 'legacy', ?, NULL, ?)").run(
-      sourceId,
-      "旧版上传（PostgreSQL）",
+  /** 把本次校验通过的原件挂到已有资料上；内容仍被占用时只能保持待补状态。 */
+  function attachOriginal(id: string, doc: LegacyDocument, saved: StoredOriginal): "attached" | "unchanged" | "pending" {
+    const existing = db
+      .prepare("SELECT id, storage_kind, path, sha256, size FROM files WHERE resource_id = ? LIMIT 1")
+      .get(id) as ExistingFile | undefined;
+    const owner = db
+      .prepare("SELECT resource_id FROM files WHERE sha256 = ? AND size = ? LIMIT 1")
+      .get(saved.sha256, saved.size) as { resource_id: string } | undefined;
+    if (owner && owner.resource_id !== id) return "pending";
+    if (existing) {
+      if (existing.storage_kind === "managed" && existing.path === saved.path && existing.sha256 === saved.sha256) {
+        return "unchanged";
+      }
+      db.prepare(
+        `UPDATE files
+            SET storage_kind = 'managed', path = ?, mime_type = ?, ext = ?, size = ?, sha256 = ?
+          WHERE id = ?`,
+      ).run(
+        saved.path,
+        doc.mimeType || "application/octet-stream",
+        path.extname(doc.fileName || saved.path).toLowerCase(),
+        saved.size,
+        saved.sha256,
+        existing.id,
+      );
+      return "attached";
+    }
+    db.prepare(
+      `INSERT INTO files (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
+       VALUES (?, ?, 'managed', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      randomUUID(),
+      id,
+      saved.path,
+      doc.mimeType || "application/octet-stream",
+      path.extname(doc.fileName || saved.path).toLowerCase(),
+      saved.size,
+      saved.sha256,
       stamp,
     );
+    return "attached";
+  }
+
+  db.exec("BEGIN");
+  try {
+    const hasNew = [...plans.values()].includes("new");
+    let sourceId: string | null = null;
+    if (hasNew) {
+      const existingSource = db
+        .prepare("SELECT id FROM sources WHERE kind = 'legacy' ORDER BY created_at LIMIT 1")
+        .get() as { id: string } | undefined;
+      sourceId = existingSource?.id ?? randomUUID();
+      if (!existingSource) {
+        db.prepare(
+          "INSERT INTO sources (id, kind, label, root_path, created_at) VALUES (?, 'legacy', ?, NULL, ?)",
+        ).run(sourceId, "旧版上传（PostgreSQL）", stamp);
+      }
+    }
 
     for (const doc of documents) {
       const id = typeof doc.id === "string" ? doc.id.trim() : "";
@@ -106,18 +171,30 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
         result.skipped += 1;
         continue;
       }
-      if (db.prepare("SELECT id FROM resources WHERE id = ?").get(id)) {
-        result.skipped += 1;
+
+      const plan = plans.get(id);
+      if (plan === "backfill") {
+        const saved = stored.get(id);
+        if (!saved) {
+          result.filesPending += 1;
+          continue;
+        }
+        const state = attachOriginal(id, doc, saved);
+        if (state === "attached") result.backfilled += 1;
+        else if (state === "pending") result.filesPending += 1;
+        else result.skipped += 1;
         continue;
       }
-      if (db.prepare("SELECT id FROM resources WHERE archive_no = ?").get(archiveNo)) {
-        result.conflicts += 1;
+      if (plan !== "new") {
+        if (db.prepare("SELECT id FROM resources WHERE id = ?").get(id)) result.skipped += 1;
+        else result.conflicts += 1;
         continue;
       }
 
       const fileName = doc.fileName ?? "";
       const ext = path.extname(fileName).toLowerCase();
       const title = (doc.title || fileName || "未命名资料").trim();
+      if (!sourceId) throw new Error("旧库导入缺少来源记录");
       db.prepare(
         `INSERT INTO resources
            (id, archive_no, title, kind, status, favorite, extracted, summary, key_points,

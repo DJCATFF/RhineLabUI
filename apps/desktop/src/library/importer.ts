@@ -11,6 +11,7 @@ export interface ImportProgress {
   current?: string;
   added?: number;
   duplicates?: number;
+  repaired?: number;
   skipped?: number;
   elapsedMs?: number;
 }
@@ -136,6 +137,7 @@ export async function importFolder(root: string, onProgress: (progress: ImportPr
     total: paths.length,
     added: result.added,
     duplicates: result.duplicates,
+    repaired: result.repaired,
     skipped: skipped + result.failed,
     elapsedMs: Date.now() - started,
   };

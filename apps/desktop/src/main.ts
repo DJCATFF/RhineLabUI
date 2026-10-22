@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { libraryPath, openLibrary } from "./library/db";
 import { importFolder } from "./library/importer";
 import { importLegacyExport } from "./library/legacy";
+import { runLibraryRegression } from "./library/regress";
 import {
   createCollection,
   facets,
@@ -76,6 +77,11 @@ if (!app.requestSingleInstanceLock()) {
 
     if (process.argv.includes("--smoke")) {
       await runSmoke();
+      return;
+    }
+
+    if (process.argv.includes("--regress-library")) {
+      await runLibraryRegression();
       return;
     }
 

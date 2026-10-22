@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "npm run build && electron .",
+    "regress": "npm run build && node scripts/regress.mjs",
     "pack": "npm run build && electron-builder --win --x64"
   },
   "devDependencies": {

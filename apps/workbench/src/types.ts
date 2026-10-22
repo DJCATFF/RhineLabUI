@@ -81,12 +81,13 @@ export interface ImportProgress {
   current?: string;
   added?: number;
   duplicates?: number;
+  repaired?: number;
   skipped?: number;
   elapsedMs?: number;
 }
 
 export interface ImportResult extends ImportProgress {
-  sourceId?: string;
+  sourceId?: string | null;
   canceled?: boolean;
 }
 
