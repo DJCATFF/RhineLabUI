@@ -3,12 +3,20 @@ export type DocumentRow = {
   archiveNumber: number;
   title?: string;
   fileName: string;
+  /** Assigned by the ingest pipeline; the archive shelves documents by this value. */
+  category?: string | null;
   size: number;
   status: string;
   createdAt: string;
   extractedAt?: string | null;
   text?: string | null;
   extractionError?: string | null;
+  /** Librarian pass results; absent when no LLM is configured or the call failed. */
+  summary?: string | null;
+  keyPoints?: string[];
+  tags?: string[];
+  /** Present on single-document reads only; also false when storage is unreachable. */
+  previewable?: boolean;
 };
 export const documentStates: Record<string, string> = {
   uploaded: '等待处理',

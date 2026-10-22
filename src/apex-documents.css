@@ -30,7 +30,7 @@
   margin: 10px 0;
 }
 .apex-original-actions[hidden],
-.apex-original-actions a[hidden] {
+.apex-original-actions [hidden] {
   display: none;
 }
 .apex-original-actions a {
@@ -41,6 +41,42 @@
 .apex-document-body {
   max-height: 360px;
   overflow: auto;
+}
+.apex-catalog {
+  margin: 12px 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #a49c8e66;
+  font-size: 13px;
+}
+.apex-catalog[hidden] {
+  display: none;
+}
+#document-summary {
+  margin: 8px 0 10px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+  opacity: var(--apex-text-clarity, 1);
+}
+.apex-key-points {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+.apex-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.apex-tags span {
+  border: 1px solid #a49c8e66;
+  padding: 3px 8px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.apex-key-points:empty,
+.apex-tags:empty {
+  display: none;
 }
 #stage:has(.apex-document-body) .detail-title-cn {
   overflow-wrap: anywhere;

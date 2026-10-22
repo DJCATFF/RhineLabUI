@@ -81,7 +81,7 @@ export class DocumentsPanel {
     this.node('.apex-original-actions').hidden = false;
     this.node<HTMLAnchorElement>('.apex-view-archive').href = archiveUrl(document.id);
     const pdf = this.node<HTMLAnchorElement>('.apex-view-pdf');
-    pdf.hidden = !/\.pdf$/i.test(document.fileName);
+    pdf.hidden = document.previewable !== true;
     pdf.href = originalUrl(document.id, true);
     this.node<HTMLAnchorElement>('.apex-download').href = originalUrl(document.id);
     this.node('h3').textContent = document.fileName;

@@ -3,21 +3,21 @@ import { InspectionOverlay } from "./inspection-overlay";
 import { DocumentDecryption } from "./document-decryption";
 import "./document-decryption.css";
 import "./decryption.css";
-import { escapeHtml } from "./html";
-import { DocumentsPanel, documentsMarkup } from "./apex-documents";
 import "./apex-documents.css";
 import { archiveUrl } from "./document-api";
 import { documentDetailMarkup, watchDocument } from "./document-detail";
-import { normalizeQuality, qualityPresets, type QualityPreset, type RenderQuality } from "./render-quality";
-import { qualityMarkup, syncQualityUI } from "./quality-settings";
+import { syncQualityUI } from "./quality-settings";
 import { superPerformanceQuality, wallpaperQuality } from "./wallpaper-quality";
 import "@kitlangton/rolling-number/styles.css";
 import "./style.css";
 import "./quality-settings.css";
 import "./responsive.css";
 import { viewportLayout, openingLayout } from "./viewport-layout";
-import { assetUrl } from "./asset-url";
-import { initPwa, pwaSettingsMarkup } from "./pwa";
+import { loadPreferences, persistPreferences } from "./app/preferences";
+import { ModalController } from "./app/modal-controller";
+import { bindInput } from "./app/input";
+import { detailMarkup, overviewPanel, tabPanelMarkup } from "./views/detail-markup";
+import { initPwa } from "./pwa";
 import { createRollingNumber, createRollingText } from "@kitlangton/rolling-number";
 import { ArchiveScene } from "./scene";
 import { ModelViewer } from "./model-viewer";
@@ -34,7 +34,6 @@ import {
   usingDocumentArchive,
 } from "./data";
 import { TerminalAudio } from "./audio";
-import { audioSettingsMarkup } from "./audio-settings";
 import { StartupGate } from "./startup";
 import { isWallpaper, wallpaperHost, wallpaperFrame, type WallpaperProperties } from "./wallpaper";
 import "./startup.css";
@@ -43,7 +42,7 @@ import { Workbench } from "./workbench";
 let workbench: Workbench | undefined;
 import { ArchivePlayground } from "./archive-playground";
 import { ARRAY_OPENING_END, openingShowsDetail } from "./wallpaper-opening";
-import { paintTheme, themeSettingsMarkup } from "./theme-ui";
+import { paintTheme } from "./theme-ui";
 let playground: ArchivePlayground | undefined;
 import { WallpaperEffects } from "./wallpaper-effects";
 import { WallpaperBackground } from "./wallpaper-background";
@@ -51,55 +50,17 @@ let wallpaperEffects: WallpaperEffects | undefined;
 
 const $ = <T extends HTMLElement = HTMLElement>(selector: string) =>
   document.querySelector<T>(selector)!;
-import { logo, brandHeading } from "./brand";
+import { stageMarkup } from "./views/stage-markup";
 const apexEnabled = !isWallpaper && (import.meta.env.DEV || import.meta.env.VITE_APEX_ENABLED === "true");
-let documentsPanel: DocumentsPanel | undefined;
 let stopDocumentWatch: (() => void) | undefined;
 const requestedDocument = new URLSearchParams(location.search).get("document");
 const initialSelection = usingDocumentArchive ? Math.max(0, records.findIndex(record => requestedDocument ? record.documentId === requestedDocument : Boolean(record.documentId))) : 0;
 
-$("#stage").innerHTML = `
-  <div id="three-scene" class="three-scene"></div>
-  <div class="scene-atmosphere archive-atmosphere"></div>
-  <div id="boot-background" class="boot-background"><svg viewBox="0 0 1920 1080" preserveAspectRatio="none"><g fill="none" stroke="#fff" stroke-width="3"><path d="M-210 705C-45 705 182 704 247 567C337 377 99 306 4 435S27 680 169 631C309 584 227 314 279 111S568-113 568-113"/><path d="M1560-80C1374 114 1671 168 1601 323S1371 367 1431 480S1692 666 1559 787S1329 886 1498 1130"/><circle cx="1450" cy="648" r="346"/><circle cx="1450" cy="648" r="348"/></g></svg></div>
-  <header class="brand">${brandHeading}</header>
-  <nav class="system-nav" aria-label="系统导航">
-    ${apexEnabled ? '<button data-action="documents">我的文档 ↗</button>' : ''}
-    ${apexEnabled ? `<button data-action="library">${usingDocumentArchive ? '刷新真实档案' : '真实档案 ↗'}</button>${usingDocumentArchive ? '<button data-action="demo">演示档案</button>' : ''}` : ''}
-    <button data-action="search"><span class="nav-glyph">⌕</span> ARCHIVE INDEX <span class="key">/</span></button>
-    <button data-action="saved" aria-label="查看收藏档案" title="收藏档案">＋ SAVED <span id="saved-count">00</span></button>
-    <button class="settings-button" data-action="settings" aria-label="系统设置" title="系统设置"><span class="settings-glyph" aria-hidden="true">◷</span><span class="settings-label">设置</span></button>
-  </nav>
-  <button id="skip" class="skip" data-action="skip">ENTER SYSTEM <span>↗</span></button>
-  <section id="boot" class="boot" aria-label="系统启动">
-    <div class="access-text">ACCESS</div>
-    <div class="boot-logo">${logo}</div>
-    <div class="auth-status"><span>▪</span> <span id="auth-message"></span><i></i></div>
-    <div class="scan"><svg viewBox="0 0 1920 1080" aria-hidden="true"><g fill="none" stroke="#080a08" stroke-width="2" stroke-linecap="round"><path/><path stroke="#fff"/><path/><path/><path/><path/><circle class="orbit-dot" r="8" fill="#ed821b" stroke="none"/><circle class="orbit-dot" r="8" fill="#ed821b" stroke="none"/><circle class="scan-core" cx="960" cy="540" r="5" fill="#080a08" stroke="none"/></g></svg><span>PERMISSION AUTHORIZED</span></div>
-    <div class="welcome"><div class="welcome-panel"></div><div class="welcome-heading">WELCOME TO</div><div class="welcome-company"><strong>RHINE LAB.LLC.</strong><strong class="welcome-highlight" aria-hidden="true">RHINE LAB.LLC.</strong></div><div class="welcome-database">INTERNAL DATABASE</div><div class="welcome-logo">${logo}</div></div>
-  </section>
-  <svg id="inspection-marks" viewBox="0 0 1920 1080" aria-hidden="true"><path id="inspection-lines"/><g id="inspection-corners"></g><circle id="inspection-point" r="1.8"/></svg>
-  <div id="inspection-text" aria-hidden="true">CONFIDENTIALITY:<strong>GENERAL BUSINESS USE</strong></div>
-  <section id="archive-ui" class="archive-ui" aria-label="档案选择">
-    <div class="archive-callout"><div class="eyebrow">INTERNAL DATABASE <span>／</span> <span id="archive-category">机构档案</span></div><button class="file-title" data-action="open">FILE NUMBER: <span id="selected-id">X-<span id="selected-code">001</span></span><span class="file-open">↗</span></button><div class="callout-rule"><i></i></div><div class="file-summary"><span id="selected-title">莱茵生命</span><span id="selected-clearance">BUSINESS AREA</span></div><button class="read-file" data-action="open">ACCESS FILE <span>→</span></button></div>
-    <div id="hover-label" class="hover-label" hidden>X-<span id="hover-code">001</span> / <span id="hover-title"></span></div>
-    <div class="archive-counter"><span class="tiny-label">ARCHIVE / SELECT</span><div><span id="selected-number">01</span><i>/</i><span class="count-total">12</span></div></div>
-    <div class="archive-navigation"><button data-action="prev" aria-label="上一个档案">↑</button><div id="file-ticks" class="file-ticks"></div><button data-action="next" aria-label="下一个档案">↓</button></div>
-    <div class="column-navigation"><button data-action="column-prev" aria-label="上一列">←</button><div><span id="column-number">COLUMN <span id="column-index">03</span> / 05</span><strong id="column-name">机构档案</strong></div><button data-action="column-next" aria-label="下一列">→</button></div>
-    <div class="archive-hint"><kbd>←</kbd> <kbd>→</kbd> 切换列 <span>／</span> <kbd>↑</kbd> <kbd>↓</kbd> 前后档案 <span>／</span> <kbd>ENTER</kbd> 读取</div>
-  </section>
-  <section id="detail-ui" class="detail-ui" aria-label="档案内容" hidden>
-    <button class="back-button" data-action="back">← <span>ARCHIVE OVERVIEW</span><small>ESC</small></button>
-    <div class="object-caption"><span id="object-id">NO.001</span><div>INTERNAL DATABASE</div><small>DRAG TO INSPECT <span>↔</span></small><button class="viewer-open" data-action="model-viewer">360° 查看文档模型 <span>↗</span></button></div>
-    <article id="detail-content" class="detail-content"></article>
-  </section>
-  <div class="powered">POWERED BY <b>RHINE LAB</b><i></i></div>
-  <footer class="system-footer"><span><i class="status-light"></i> SESSION AUTHORIZED${isWallpaper ? '<button type="button" class="three-toggle" data-action="toggle-three" aria-pressed="true" title="卸载三维模型，保留 2D 界面">3D 开启</button>' : ''}</span><span>JOYCE MOORE <i>／</i> <span id="clock">00:00:00</span></span><button data-action="replay" title="重播启动流程">REINITIALIZE ↗</button></footer>
-  <div id="pwa-update-notice" class="pwa-update-notice" role="status" hidden><span>新版本已就绪</span><button data-pwa-action="update">更新并重启 ↻</button></div>
-  <div id="modal-root"></div><div id="toast" class="toast" role="status"></div>
-  <div id="loading" class="loading"><div class="loading-mark">${logo}</div><span>CONNECTING TO INTERNAL DATABASE</span><i></i></div>
-`;
-
+$("#stage").innerHTML = stageMarkup({
+  apexEnabled,
+  documentArchive: usingDocumentArchive,
+  wallpaper: isWallpaper,
+});
 $("#boot-background").insertAdjacentHTML(
   "beforeend",
   '<div class="boot-white"></div>',
@@ -113,9 +74,6 @@ let mode: Mode = "boot",
   bootStart = 0,
   lastStep = "",
   ready = false;
-let modal: "search" | "saved" | "settings" | "documents" | null = null,
-  searchQuery = "",
-  filter = "全部档案";
 let activeTab = "overview";
 const reviewParams = new URLSearchParams(location.search);
 let frozenTime =
@@ -138,12 +96,8 @@ if (reviewParams.get("review") === "1") {
   });
 }
 let toastTimer: ReturnType<typeof setTimeout>;
-let previousFocus: HTMLElement | null = null;
 const detailTransition = new SurfaceTransition($("#detail-ui"), undefined, 180, 180);
 const tabTransition = new ContentTransition();
-let modalTransition: SurfaceTransition | undefined;
-let modalClosing = false;
-let modalSiblings: { node: HTMLElement; inert: boolean }[] = [];
 let pendingDetailFocus = false;
 let bookmarkFeedback: Animation | undefined;
 function readLocal<T>(key: string, fallback: T): T {
@@ -155,19 +109,7 @@ function readLocal<T>(key: string, fallback: T): T {
 }
 const savedKey = usingDocumentArchive ? "apex-saved" : "rhine-saved";
 const saved = new Set<string>(readLocal<string[]>(savedKey, []));
-const storedPrefs = readLocal<Partial<{ sound: boolean; music: boolean; soundVolume: number; musicVolume: number; reduced: boolean; quality: boolean; rendering: RenderQuality; superPerformance: boolean; colorTheme: "light" | "dark" }>>("rhine-settings", {});
-const prefs = {
-  sound: true,
-  music: storedPrefs.sound ?? true,
-  soundVolume: .55,
-  musicVolume: .5,
-  reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
-  quality: true,
-  superPerformance: false,
-  ...storedPrefs,
-  rendering: normalizeQuality(storedPrefs.rendering, storedPrefs.quality !== false),
-  colorTheme: storedPrefs.colorTheme === "dark" ? "dark" : "light",
-};
+const prefs = loadPreferences();
 paintTheme(prefs.colorTheme === "dark" ? 1 : 0);
 const rollingMotion = {
   duration: 460,
@@ -255,9 +197,7 @@ function recordAccess() {
   });
 }
 function saveAudioPrefs() {
-  try {
-    localStorage.setItem("rhine-settings", JSON.stringify(prefs));
-  } catch {}
+  persistPreferences(prefs);
   configureAudio();
 }
 function superPerformanceEnabled() { return isWallpaper ? wallpaperHost()?.properties.superperformance?.value === true : prefs.superPerformance; }
@@ -267,7 +207,7 @@ function savePrefs() {
   if (prefs.reduced) {
     rollingTitles.forEach(title => title.finish());
     detailTransition.finish();
-    modalTransition?.finish();
+    modals.finish();
     tabTransition.cancel();
     bookmarkFeedback?.cancel();
   }
@@ -367,19 +307,19 @@ function setMode(next: Mode) {
   if (previousMode !== next) fit();
   $("#boot").inert = next !== "boot";
   $("#boot").setAttribute("aria-hidden", String(next !== "boot"));
-  $("#archive-ui").inert = next !== "archive" || Boolean(modal) || Boolean(workbench?.enabled);
+  $("#archive-ui").inert = next !== "archive" || modals.open || Boolean(workbench?.enabled);
   $("#archive-ui").setAttribute("aria-hidden", String(next !== "archive" || Boolean(workbench?.enabled)));
-  $(".system-nav").inert = next === "boot" || Boolean(modal);
-  $(".system-footer").inert = next === "boot" || Boolean(modal);
+  $(".system-nav").inert = next === "boot" || modals.open;
+  $(".system-footer").inert = next === "boot" || modals.open;
   if (next === "detail") {
     if (previousMode !== "detail") detailTransition.show(prefs.reduced);
   } else if (previousMode === "detail" || (next === "boot" && !$("#detail-ui").hidden)) {
     pendingDetailFocus = false;
     tabTransition.cancel();
     detailTransition.hide(prefs.reduced || next === "boot");
-    if (!modal && next === "archive") $(".read-file").focus({ preventScroll: true });
+    if (!modals.open && next === "archive") $(".read-file").focus({ preventScroll: true });
   }
-  $("#detail-ui").inert = next !== "detail" || Boolean(modal);
+  $("#detail-ui").inert = next !== "detail" || modals.open;
   scene?.setMode(next === "boot" ? "hidden" : next);
   if (next !== "boot") {
     bootSequence.reset();
@@ -474,7 +414,7 @@ function updateSelection(navigation?: ArchiveNavigation) {
 }
 function replayBoot(forcePreview = false) {
   if (!ready) return;
-  closeModal(() => replayBootAfterModal(forcePreview));
+  modals.close(() => replayBootAfterModal(forcePreview));
 }
 function replayBootAfterModal(forcePreview: boolean) {
   bootStart = performance.now() / 1000 - 1.76;
@@ -490,7 +430,7 @@ function replayBootAfterModal(forcePreview: boolean) {
 function openFile() {
   if (!ready) return;
   if (records[selected].empty) { notify("此分类暂无文档，请从“我的文档”上传。"); return; }
-  closeModal(() => {
+  modals.close(() => {
     setMode("detail");
     audio.play("open");
   });
@@ -530,22 +470,20 @@ function renderDetail() {
     return;
   }
   $("#object-id").textContent = "NO." + String(selected + 1).padStart(3, "0");
-  $("#detail-content").innerHTML = `
-  <div class="detail-kicker"><span>FILE ${r.id}</span><span>${escapeHtml(r.clearance)}</span></div>
-  <h2>${escapeHtml(r.en)}</h2><div class="detail-title-cn">${escapeHtml(r.title)}<span>${escapeHtml(r.category)}</span></div>
-  <div class="detail-rule"></div>
-  <dl class="metadata"><div><dt>DEPARTMENT / 科室</dt><dd>${escapeHtml(r.department)}</dd></div><div><dt>COLLECTION / 编目范围</dt><dd>${escapeHtml(r.date)}</dd></div><div><dt>RELATED / 相关人物</dt><dd>${escapeHtml(r.lead)}</dd></div><div><dt>STATUS / 状态</dt><dd><i></i>${r.clearance === "RESTRICTED" ? "目录访问" : "已归档 · 可读取"}</dd></div></dl>
-  <div class="detail-tabs" role="tablist"><button id="tab-overview" class="active" role="tab" aria-controls="tab-panel" aria-selected="true" data-tab="overview">01 <span>概述</span></button><button id="tab-notes" role="tab" aria-controls="tab-panel" aria-selected="false" data-tab="notes">02 <span>研究记录</span></button><button id="tab-history" role="tab" aria-controls="tab-panel" aria-selected="false" data-tab="history">03 <span>访问日志</span></button><i class="tab-indicator" aria-hidden="true"></i></div>
-  <div id="tab-panel" class="tab-panel" role="tabpanel">${overview()}</div>
-  <div class="detail-actions"><button class="solid-button" data-action="bookmark">${saved.has(r.id) ? "− REMOVE FROM SAVED" : "＋ SAVE ARCHIVE"}<span>${saved.has(r.id) ? "已收藏" : "收藏档案"}</span></button><a class="export-button" href="${assetUrl(`archives/RHINE-LAB-${r.id}.txt`)}" download="RHINE-LAB-${r.id}.txt" aria-label="导出 ${r.id} 档案">EXPORT <span>↓</span></a></div>
-  <div class="detail-footnote"><a href="${escapeHtml(r.source)}" target="_blank" rel="noopener">设定参考 ↗</a><span>${String(selected + 1).padStart(3, "0")} / ${String(records.length).padStart(3, "0")}</span></div>`;
+  $("#detail-content").innerHTML = detailMarkup({
+    record: r,
+    index: selected,
+    total: records.length,
+    saved: saved.has(r.id),
+    overviewHtml: overview(),
+  });
   $("#detail-content").setAttribute("tabindex", "-1");
   $('[data-action="bookmark"]').setAttribute("aria-pressed", String(saved.has(r.id)));
   documentDecryption.reset($("#detail-content"), prefs.reduced || !scene || scene.decryptionFrame.phase === "clear");
   setTab(activeTab, false);
 }
 function overview() {
-  return `<div class="panel-label">ABSTRACT / 摘要</div><p>${escapeHtml(records[selected].abstract)}</p>`;
+  return overviewPanel(records[selected].abstract);
 }
 function setTab(tab: string, sound = true) {
   if (sound && tab === activeTab) return;
@@ -562,21 +500,11 @@ function setTab(tab: string, sound = true) {
   indicator.style.transition = sound ? "" : "none";
   indicator.style.transform = `translateX(${tabButton.offsetLeft}px) scaleX(${tabButton.offsetWidth})`;
   $("#tab-panel").setAttribute("aria-labelledby", tabButton.id);
-  $("#tab-panel").innerHTML =
-    tab === "overview"
-      ? overview()
-      : tab === "notes"
-        ? `<div class="panel-label">RESEARCH NOTES / 研究记录</div><ol class="research-notes">${r.findings.map((f, i) => `<li><span>${String(i + 1).padStart(2, "0")}</span>${escapeHtml(f)}</li>`).join("")}</ol>`
-        : `<div class="panel-label">ACCESS LOG / 本次访问</div>${accessLog
-            .filter((entry) => entry.id === r.id)
-            .slice(0, 4)
-            .map(
-              (entry) =>
-                `<div class="log-row"><span>${entry.time}</span><span>JOYCE MOORE</span><b>READ AUTHORIZED</b></div>`,
-            )
-            .join(
-              "",
-            )}<p class="log-note">本次会话已通过身份验证。档案内容以当前终端可访问范围展示。</p>`;
+  $("#tab-panel").innerHTML = tabPanelMarkup(
+    tab,
+    r,
+    accessLog.filter((entry) => entry.id === r.id),
+  );
   $("#tab-panel").scrollTop = 0;
   documentDecryption.refresh();
   if (sound) {
@@ -591,107 +519,20 @@ function notify(message: string) {
   toastTimer = setTimeout(() => $("#toast").classList.remove("visible"), 2600);
 }
 
-function openModal(kind: NonNullable<typeof modal>) {
-  if (!ready) return;
-  if (!modal) {
-    previousFocus = document.activeElement as HTMLElement;
-    modalSiblings = [...$("#stage").children]
-      .filter((node): node is HTMLElement => node instanceof HTMLElement && node.id !== "modal-root")
-      .map((node) => ({ node, inert: node.inert }));
-    modalSiblings.forEach(({ node }) => (node.inert = true));
-  }
-  modalClosing = false;
-  modal = kind;
-  searchQuery = "";
-  filter = "全部档案";
-  audio.play("page-open");
-  renderModal();
-}
-function closeModal(afterClose?: () => void) {
-  if (documentsPanel?.busy) { notify("文件正在上传，请等待上传结束后关闭。"); return; }
-  if (!modal) {
-    afterClose?.();
-    return;
-  }
-  if (modalClosing) return;
-  modalClosing = true;
-  documentsPanel?.dispose();
-  documentsPanel = undefined;
-  audio.play("page-close");
-  modalTransition!.hide(prefs.reduced, () => {
-    modal = null;
-    modalClosing = false;
-    $("#modal-root").replaceChildren();
-    modalTransition = undefined;
-    modalSiblings.forEach(({ node, inert }) => (node.inert = inert));
-    modalSiblings = [];
-    $("#archive-ui").inert = mode !== "archive" || Boolean(workbench?.enabled);
-    $("#detail-ui").inert = mode !== "detail";
-    previousFocus?.focus({ preventScroll: true });
-    afterClose?.();
-  });
-}
-function renderModal() {
-  if (!modal) return;
-  documentsPanel?.dispose();
-  documentsPanel = undefined;
-  modalTransition?.dispose();
-  if (modal === "documents") {
-    $("#modal-root").innerHTML = documentsMarkup;
-    const backdrop = $(".modal-backdrop");
-    backdrop.hidden = true;
-    modalTransition = new SurfaceTransition(backdrop, $(".terminal-modal"));
-    modalTransition.show(prefs.reduced);
-    documentsPanel = new DocumentsPanel($(".apex-modal"));
-    backdrop.addEventListener("click", e => { if (e.target === backdrop) closeModal(); });
-    requestAnimationFrame(() => { if (backdrop.isConnected && !modalClosing) $('[data-action="close-modal"]').focus({ preventScroll: true }); });
-    return;
-  }
-  $("#modal-root").innerHTML =
-    `<div class="modal-backdrop"><section class="terminal-modal ${modal === "settings" ? "settings-modal" : ""}" role="dialog" aria-modal="true" aria-label="${modal === "settings" ? "系统设置" : modal === "saved" ? "收藏档案" : "档案检索"}"><div class="modal-top"><span>RHINE LAB / ${modal === "settings" ? "SYSTEM PREFERENCES" : "ARCHIVE DIRECTORY"}</span><button data-action="close-modal" aria-label="关闭窗口">CLOSE <span>×</span></button></div>${modal === "settings" ? settingsMarkup() : `<h2>${modal === "saved" ? "SAVED ARCHIVES" : "ARCHIVE INDEX"}<small>${modal === "saved" ? "收藏档案" : "内部档案检索"}</small></h2><div class="search-field"><span>⌕</span><input id="archive-search" type="search" autocomplete="off" placeholder="输入档案编号、名称或科室" aria-label="检索档案"/><span class="key">ESC</span></div><div class="category-filters">${categories.map((c, i) => `<button data-filter="${escapeHtml(c)}" class="${i === 0 ? "active" : ""}">${escapeHtml(c)}</button>`).join("")}</div><div class="result-header"><span>FILE / 档案</span><span>DEPARTMENT / 科室</span><span>ACCESS</span></div><div id="search-results" class="search-results"></div><div class="modal-bottom"><span id="result-count"></span><span>INTERNAL DATABASE <i>●</i> CONNECTED</span></div>`}</section></div>`;
-  const backdrop = $(".modal-backdrop");
-  backdrop.hidden = true;
-  modalTransition = new SurfaceTransition(backdrop, $(".terminal-modal"));
-  modalTransition.show(prefs.reduced);
-  if (modal === "settings") updateQualitySummary();
-  if (modal !== "settings") {
-    renderResults();
-    requestAnimationFrame(() => {
-      if (backdrop.isConnected && !modalClosing) $("#archive-search").focus();
-    });
-  } else
-    requestAnimationFrame(() => {
-      if (backdrop.isConnected && !modalClosing) $('[data-action="close-modal"]').focus();
-    });
-  $("#modal-root")
-    .querySelector(".modal-backdrop")
-    ?.addEventListener("click", (e) => {
-      if (e.target === e.currentTarget) closeModal();
-    });
-}
-function renderResults() {
-  const results = records
-    .map((r, i) => ({ r, i }))
-    .filter(({ r }) => !r.empty)
-    .filter(
-      ({ r }) =>
-        (modal !== "saved" || saved.has(r.id)) &&
-        (filter === "全部档案" || r.category === filter) &&
-        `${r.id} ${r.title} ${r.en} ${r.department} ${r.lead}`
-          .toLowerCase()
-          .includes(searchQuery.toLowerCase()),
-    );
-  $("#search-results").innerHTML = results.length
-    ? results
-        .map(
-          ({ r, i }) =>
-            `<button class="result-row" data-result="${i}"><span class="result-name"><b>${r.id}</b><span>${escapeHtml(r.title)}<small>${escapeHtml(r.en)}</small></span>${saved.has(r.id) ? "<i>＋</i>" : ""}</span><span>${escapeHtml(r.department)}</span><span>${r.clearance === "RESTRICTED" ? "CATALOG ONLY" : "AUTHORIZED"} <i>↗</i></span></button>`,
-        )
-        .join("")
-    : `<div class="empty-results"><span>∅</span><strong>${modal === "saved" && !searchQuery ? "尚无收藏档案" : "没有匹配的档案"}</strong><p>${modal === "saved" && !searchQuery ? "读取档案时，选择 SAVE ARCHIVE 将其保存在此处。" : "尝试其他名称、档案编号，或切换科室分类。"}</p><button data-action="reset-search">${modal === "saved" ? "查看全部档案 →" : "重置检索 →"}</button></div>`;
-  $("#result-count").textContent =
-    `${String(results.length).padStart(2, "0")} RECORDS FOUND`;
-}
+const modals = new ModalController({
+  isReady: () => ready,
+  mode: () => mode,
+  preferences: () => prefs,
+  saved: () => saved,
+  records: () => records,
+  categories: () => categories,
+  audio,
+  notify,
+  workbenchSettings: () => workbench?.settingsMarkup() ?? "",
+  workbenchEnabled: () => Boolean(workbench?.enabled),
+  wallpaper: () => isWallpaper,
+  updateQualitySummary,
+});
 function updateQualitySummary() {
   const summary = document.querySelector("#quality-summary");
   if (!summary) return;
@@ -700,229 +541,52 @@ function updateQualitySummary() {
   const metrics = JSON.parse(canvas.parentElement?.dataset.renderQuality ?? "{}");
   summary.textContent = `${superPerformanceEnabled() ? "超级性能模式已启用 · 画质设置暂被覆盖，关闭后恢复 · " : ""}实际渲染 ${canvas.width} × ${canvas.height} · ${effectiveRenderQuality().antialias === "smaa" ? "SMAA" : "原始抗锯齿"} · 纹理 ${metrics.anisotropy ?? 1}×${metrics.limited ? " · 已达到缓冲上限" : ""}`;
 }
-function motionSettingsMarkup() {
-  return `<div id="motion-preference-note" class="motion-preference-note"><p>${prefs.reduced
-    ? `当前已减少动态效果。${matchMedia("(prefers-reduced-motion: reduce)").matches ? "系统也请求减少动画，可仅为本站启用完整动效。" : "关闭上方开关可恢复完整动效。"}`
-    : "当前使用完整动效。"}</p>${prefs.reduced ? '<button data-action="enable-motion">启用完整动效并重播 ↻</button>' : ""}</div>`;
-}
-function settingsMarkup() {
-  return `<h2>SYSTEM SETTINGS<small>终端偏好设置</small></h2><p class="settings-intro">JOYCE MOORE <span>·</span> SESSION AUTHORIZED</p>${isWallpaper ? '<p class="wallpaper-settings-note">每次启动都会读取 Wallpaper Engine 中的设置。在此修改仅对当前运行生效，无法持久保存；如需保留，请在 Wallpaper Engine 的壁纸属性中调整。</p>' : ""}<div class="settings-list">${themeSettingsMarkup(prefs.colorTheme === "dark")}${!isWallpaper ? `<label><div><strong>SUPER PERFORMANCE</strong><span>降低三维画质和渲染分辨率，保留完整动效；关闭后恢复原画质</span></div><input type="checkbox" data-pref="superPerformance" ${prefs.superPerformance ? "checked" : ""}/><i class="toggle"></i></label>` : ""}${workbench?.settingsMarkup() ?? ""}${audioSettingsMarkup(prefs)}<label><div><strong>REDUCED MOTION</strong><span>跳过开机动画，简化选档、镜头和文字动效</span></div><input type="checkbox" data-pref="reduced" ${prefs.reduced ? "checked" : ""}/><i class="toggle"></i></label></div>${motionSettingsMarkup()}${qualityMarkup(prefs.rendering)}${pwaSettingsMarkup()}<div class="settings-shortcuts">${isWallpaper ? '<span>DESKTOP CONTROLS</span><p>拖动阵列或点击界面按钮浏览档案。桌面模式下，方向键与滚轮可能无法传入壁纸。</p>' : '<span>KEYBOARD CONTROLS</span><p><kbd>←</kbd><kbd>→</kbd> 切列 <kbd>↑</kbd><kbd>↓</kbd> 选档 <kbd>ENTER</kbd> 读取 <kbd>/</kbd> 检索 <kbd>ESC</kbd> 返回</p>'}</div><div class="settings-bottom">${!isWallpaper && document.fullscreenEnabled ? '<button data-action="fullscreen">FULLSCREEN <span>↗</span></button>' : ''}<button data-action="restart">REINITIALIZE SYSTEM <span>↻</span></button></div><div class="modal-bottom"><span>ANALYSIS OS / 1.0 · 使用 MiSans 字体（小米） <a href="${assetUrl("fonts/MiSans-license.pdf")}" target="_blank" rel="noopener">字体许可</a></span><span>POWERED BY RHINE LAB</span></div>`;
-}
 
-document.addEventListener("input", (e) => {
-  const slider = e.target as HTMLInputElement;
-  if (slider.dataset.quality) {
-    const output = document.querySelector<HTMLOutputElement>(`[data-quality-output="${slider.dataset.quality}"]`);
-    if (output) output.value = `${slider.value}%`;
-  }
-  const volume = e.target as HTMLInputElement;
-  if (volume.dataset.volume === "musicVolume" || volume.dataset.volume === "soundVolume") {
-    prefs[volume.dataset.volume] = Number(volume.value) / 100;
-    volume.closest("label")?.querySelector("output")?.replaceChildren(`${volume.value}%`);
-    saveAudioPrefs();
-  }
-  if ((e.target as HTMLElement).id === "archive-search") {
-    searchQuery = (e.target as HTMLInputElement).value;
-    renderResults();
-  }
-});
-document.addEventListener("change", (e) => {
-  const el = e.target as HTMLInputElement;
-  if (el.id === "quality-preset" && Object.hasOwn(qualityPresets, el.value)) {
-    prefs.rendering = { ...qualityPresets[el.value as QualityPreset] };
-    savePrefs();
-  } else if (el.dataset.quality) {
-    const key = el.dataset.quality as keyof RenderQuality;
-    prefs.rendering = normalizeQuality({ ...prefs.rendering, [key]: key === "antialias" ? el.value : Number(el.value) });
-    savePrefs();
-  }
-  if (el.dataset.pref) {
-    const key = el.dataset.pref;
-    if (key === "sound" || key === "music" || key === "reduced" || key === "quality" || key === "superPerformance") prefs[key] = el.checked;
-    if (key === "sound" || key === "music") saveAudioPrefs(); else savePrefs();
-    if (key === "reduced") $("#motion-preference-note").outerHTML = motionSettingsMarkup();
-    audio.play("confirm");
-  }
-});
-document.addEventListener("click", (e) => {
-  const themeButton = (e.target as Element).closest<HTMLElement>("[data-color-theme]");
-  if (themeButton) { prefs.colorTheme = themeButton.dataset.colorTheme === "dark" ? "dark" : "light"; savePrefs(); return; }
-  if (!started) return;
-  if (modalClosing) return;
-  const el = (e.target as Element).closest<HTMLElement>("button");
-  if (!el) return;
-  if (el.dataset.select) {
-    select(Number(el.dataset.select));
-    return;
-  }
-  if (el.dataset.result) {
-    const index = Number(el.dataset.result);
-    closeModal(() => {
-      select(index);
-      openFile();
-    });
-    return;
-  }
-  if (el.dataset.filter) {
-    filter = el.dataset.filter;
-    document
-      .querySelectorAll("[data-filter]")
-      .forEach((b) =>
-        b.classList.toggle(
-          "active",
-          (b as HTMLElement).dataset.filter === filter,
-        ),
-      );
-    renderResults();
-    return;
-  }
-  if (el.dataset.tab) {
-    setTab(el.dataset.tab);
-    return;
-  }
-  const action = el.dataset.action;
-  if (action === "toggle-three") { void toggleThree(); return; }
-  if (action === "sound-preview") audio.play("confirm");
-  if (action === "skip") {
-    setMode("archive");
-    audio.play("confirm");
-  }
-  if (action === "prev") stepFile(-1);
-  if (action === "next") stepFile(1);
-  if (action === "column-prev") stepColumn(-1);
-  if (action === "column-next") stepColumn(1);
-  if (action === "open") openFile();
-  if (action === "model-viewer" && mode === "detail" && scene) {
-    const activeScene = scene;
-    // Safari does not always focus a button when it is tapped. Capture the
-    // actual opener so closing the modal reliably restores the right control.
-    el.focus({ preventScroll: true });
-    viewer ??= new ModelViewer($("#stage"), () => { audio.setScene(mode); audio.play("page-close"); }, (sound) => audio.play(sound === "tick" ? "ui-tick" : sound));
-    audio.setScene("viewer");
-    viewer.setSuperPerformance(superPerformanceEnabled());
-    viewer.setQuality(effectiveRenderQuality());
-    scene.finishDecryption();
-    viewer.open(
-      records[selected].id,
-      records[selected].title,
-      () => activeScene.createAssemblyModel(),
-      prefs.reduced,
-    );
-    audio.play("page-open");
-  }
-  if (action === "back") {
-    setMode("archive");
-    audio.play("back");
-  }
-  if (action === "library" && apexEnabled) location.href = archiveUrl();
-  if (action === "demo" && apexEnabled) location.href = "/";
-  if (action === "search" || action === "saved" || action === "settings" || (action === "documents" && apexEnabled)) {
-    el.focus({ preventScroll: true });
-    openModal(action === "search" && usingDocumentArchive ? "documents" : action);
-  }
-  if (action === "close-modal") closeModal();
-  if (action === "bookmark") toggleSaved();
-  if (action === "reset-search") {
-    modal = "search";
-    searchQuery = "";
-    filter = "全部档案";
-    renderModal();
-  }
-  if (action === "replay" || action === "restart") {
-    replayBoot();
-  }
-  if (action === "enable-motion") {
-    prefs.reduced = false;
-    savePrefs();
-    replayBoot();
-  }
-  if (action === "fullscreen" && document.fullscreenEnabled) {
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else
-      void document.documentElement
-        .requestFullscreen()
-        .catch(() => notify("请使用浏览器的全屏快捷键 F11"));
-  }
-});
-document.addEventListener("keydown", (e) => {
-  if (!started) return;
-  if (viewer?.isOpen) return;
-  if (playground?.active && !modal) {
-    if (e.key === "Escape") { e.preventDefault(); playground.stop(); }
-    else if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Enter", "/"].includes(e.key) && !(e.target instanceof HTMLButtonElement)) e.preventDefault();
-    return;
-  }
-  if (modalClosing) {
-    e.preventDefault();
-    return;
-  }
-  const typing = e.target instanceof HTMLInputElement;
-  if (e.key === "Escape") {
-    if (modal) closeModal();
-    else if (mode === "detail" || (mode === "boot" && ready)) { const sound = mode === "detail" ? "back" : "ui-tick"; setMode("archive"); audio.play(sound); }
-    return;
-  }
-  if (modal && e.key === "Tab") {
-    const focusables = [
-      ...$("#modal-root").querySelectorAll<HTMLElement>(
-        'a[href],button:not(:disabled),input:not(:disabled),select:not(:disabled),summary,[tabindex="0"]',
-      ),
-    ];
-    const visible = focusables.filter(el => el.getClientRects().length > 0);
-    const first = visible[0],
-      last = visible.at(-1);
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault();
-      last?.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first?.focus();
-    }
-    return;
-  }
-  if (typing || modal || !ready) return;
-  if (
-    (e.target as HTMLElement).dataset.tab &&
-    ["ArrowLeft", "ArrowRight"].includes(e.key)
-  ) {
-    e.preventDefault();
-    const tabs = ["overview", "notes", "history"];
-    setTab(
-      tabs[(tabs.indexOf(activeTab) + (e.key === "ArrowRight" ? 1 : 2)) % 3],
-    );
-    $<HTMLButtonElement>(`[data-tab="${activeTab}"]`).focus();
-    return;
-  }
-  if (e.key === "/") {
-    e.preventDefault();
-    if (mode === "boot") setMode("archive");
-    openModal(usingDocumentArchive ? "documents" : "search");
-  }
-  if (e.key === "ArrowLeft" && mode !== "boot") {
-    e.preventDefault();
-    stepColumn(-1);
-  }
-  if (e.key === "ArrowRight" && mode !== "boot") {
-    e.preventDefault();
-    stepColumn(1);
-  }
-  if (["ArrowUp", "ArrowDown"].includes(e.key) && mode !== "boot") {
-    e.preventDefault();
-    stepFile(e.key === "ArrowUp" ? -1 : 1);
-  }
-  if (
-    e.key === "Enter" &&
-    (document.activeElement === document.body ||
-      document.activeElement?.id === "detail-content" ||
-      ["prev", "next", "column-prev", "column-next"].includes(
-        (document.activeElement as HTMLElement)?.dataset.action ?? "",
-      ) ||
-      (document.activeElement as HTMLElement)?.dataset.select)
-  ) {
-    e.preventDefault();
-    if (mode === "boot") setMode("archive");
-    else if (mode === "archive") openFile();
-  }
+function openModelViewer(el: HTMLElement) {
+  if (mode !== "detail" || !scene) return;
+  const activeScene = scene;
+  // Safari does not always focus a button when it is tapped. Capture the
+  // actual opener so closing the modal reliably restores the right control.
+  el.focus({ preventScroll: true });
+  viewer ??= new ModelViewer($("#stage"), () => { audio.setScene(mode); audio.play("page-close"); }, (sound) => audio.play(sound === "tick" ? "ui-tick" : sound));
+  audio.setScene("viewer");
+  viewer.setSuperPerformance(superPerformanceEnabled());
+  viewer.setQuality(effectiveRenderQuality());
+  scene.finishDecryption();
+  viewer.open(
+    records[selected].id,
+    records[selected].title,
+    () => activeScene.createAssemblyModel(),
+    prefs.reduced,
+  );
+  audio.play("page-open");
+}
+bindInput({
+  prefs: () => prefs,
+  started: () => started,
+  ready: () => ready,
+  mode: () => mode,
+  activeTab: () => activeTab,
+  audio,
+  modals,
+  savePrefs,
+  saveAudioPrefs,
+  select,
+  stepFile,
+  stepColumn,
+  openFile,
+  setTab,
+  setMode,
+  replayBoot,
+  notify,
+  toggleSaved,
+  toggleThree,
+  openModelViewer,
+  viewerOpen: () => Boolean(viewer?.isOpen),
+  playgroundActive: () => Boolean(playground?.active),
+  stopPlayground: () => playground?.stop(),
+  apexEnabled: () => apexEnabled,
+  archiveUrl,
 });
 
 const ease = (t: number) => {
@@ -1014,7 +678,7 @@ function frame(ms: number) {
     $("#detail-content").style.translate =
       `0 ${(1 - scene.detailVisibility) * 18}px`;
     $("#detail-content").inert = scene.detailVisibility < 0.1;
-    if (pendingDetailFocus && scene.detailVisibility >= 0.1 && !modal && !viewer?.isOpen) {
+    if (pendingDetailFocus && scene.detailVisibility >= 0.1 && !modals.open && !viewer?.isOpen) {
       $("#detail-content").focus({ preventScroll: true });
       pendingDetailFocus = false;
     }
@@ -1040,11 +704,11 @@ function frame(ms: number) {
 function bindScene(scene: ArchiveScene, cell?: { lane: number; row: number }) {
     scene.select(selected, cell ? { cell } : undefined);
     scene.onSelect = (i, cell) => {
-      if (mode !== "archive" || modal || viewer?.isOpen) return;
+      if (mode !== "archive" || modals.open || viewer?.isOpen) return;
       select(i, cell ? { cell } : undefined);
     };
     scene.onNavigate = (axis, direction) => {
-      if (mode !== "archive" || modal || viewer?.isOpen) return;
+      if (mode !== "archive" || modals.open || viewer?.isOpen) return;
       if (axis === "lane") stepColumn(direction);
       else stepFile(direction);
     };
@@ -1257,15 +921,15 @@ if (isWallpaper) {
   workbench = new Workbench($("#stage"), () => {
     if (ready && mode !== "boot") setMode("archive");
   }, lane => {
-    if (ready && !modal) select(columnMemory[lane]);
+    if (ready && !modals.open) select(columnMemory[lane]);
   });
   playground = new ArchivePlayground($("#stage"), () => scene,
-    () => ({ enabled: !!workbench?.enabled && mode === "archive" && ready, paused: Boolean(modal) || modalClosing || Boolean(wallpaperHost()?.paused) || document.hidden, reduced: prefs.reduced }),
+    () => ({ enabled: !!workbench?.enabled && mode === "archive" && ready, paused: modals.open || modals.isClosing || Boolean(wallpaperHost()?.paused) || document.hidden, reduced: prefs.reduced }),
     value => { musicSuppressed = value; configureAudio(); }, () => audio.play("tick"));
   wallpaperEffects = new WallpaperEffects($("#stage"), () => scene);
   document.addEventListener("click", event => {
     const button = (event.target as Element).closest<HTMLElement>("[data-workbench-mode]");
-    if (button) closeModal(() => { workbench!.setEnabled(button.dataset.workbenchMode === "workbench"); });
+    if (button) modals.close(() => { workbench!.setEnabled(button.dataset.workbenchMode === "workbench"); });
   });
 }
 void start();
