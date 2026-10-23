@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Facets, ResourceDetail } from "../types";
 import { archiveLabel, formatDate, formatSize, parentPath } from "../api";
-import { KIND_LABEL, isReadable } from "../types";
+import { KIND_LABEL, isExtractableKind, isReadable } from "../types";
 import { Preview } from "./Preview";
 import { IconClose, IconCollection, IconFolderOpen, IconRead, IconRestore, IconStar, IconTrash } from "./Icons";
 
@@ -20,10 +20,26 @@ interface DetailPanelProps {
   onTrash: () => void;
   onRestore: () => void;
   onOpenCollection: (id: string) => void;
+  onRetryExtraction: () => void;
+}
+
+/** 正文抽取状态的文案：原件仍在，失败时可原地重试。 */
+function extractionState(detail: ResourceDetail): { text: string; failed: boolean; canRetry: boolean } {
+  const job = detail.job;
+  if (detail.extracted && detail.extracted.trim()) {
+    return { text: `正文已抽取，共 ${detail.extracted.length.toLocaleString()} 字。`, failed: false, canRetry: false };
+  }
+  if (job?.status === "failed" || detail.status === "failed") {
+    return { text: `抽取失败：${job?.error ?? "未知原因"}`, failed: true, canRetry: true };
+  }
+  if (job?.status === "running" || detail.status === "processing") {
+    return { text: "正在后台抽取正文…", failed: false, canRetry: false };
+  }
+  return { text: "已加入抽取队列，完成后可参与正文检索。", failed: false, canRetry: false };
 }
 
 export function DetailPanel(props: DetailPanelProps) {
-  const { detail, loading, facets, onClose, onRead, onOpenOriginal, onReveal, onUpdate, onTags, onCollections, onCreateCollection, onTrash, onRestore, onOpenCollection } = props;
+  const { detail, loading, facets, onClose, onRead, onOpenOriginal, onReveal, onUpdate, onTags, onCollections, onCreateCollection, onTrash, onRestore, onOpenCollection, onRetryExtraction } = props;
 
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
@@ -59,6 +75,8 @@ export function DetailPanel(props: DetailPanelProps) {
       </aside>
     );
   }
+
+  const extraction = extractionState(detail);
 
   const commitTitle = () => {
     const next = title.trim();
@@ -168,6 +186,20 @@ export function DetailPanel(props: DetailPanelProps) {
             </span>
             <span>{Math.round(detail.reading.progress * 100)}%</span>
           </div>
+        )}
+
+        {isExtractableKind(detail.kind) && (
+          <section className="block">
+            <p className="block-title">
+              正文抽取
+              {extraction.canRetry && (
+                <button type="button" className="block-add" onClick={onRetryExtraction}>
+                  重试抽取
+                </button>
+              )}
+            </p>
+            <p className={`block-placeholder${extraction.failed ? " is-failed" : ""}`}>{extraction.text}</p>
+          </section>
         )}
 
         <section className="block">

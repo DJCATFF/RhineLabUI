@@ -47,6 +47,22 @@ export interface ResourceFile {
   sha256: string;
 }
 
+export interface ExtractionJob {
+  id: string;
+  status: string;
+  attempts: number;
+  error: string | null;
+  updatedAt: string;
+}
+
+export interface JobsSummary {
+  pending: number;
+  running: number;
+  failed: number;
+  done: number;
+  total: number;
+}
+
 export interface ResourceDetail extends ResourceItem {
   note: string | null;
   summary: string | null;
@@ -56,6 +72,7 @@ export interface ResourceDetail extends ResourceItem {
   tagDetails: { id: string; name: string; origin: string }[];
   reading: { locator: string; progress: number; updated_at: string } | null;
   source: { id: string; kind: string; label: string; root_path: string | null } | null;
+  job: ExtractionJob | null;
 }
 
 export interface ListResult {
@@ -112,6 +129,19 @@ export const KIND_LABEL: Record<string, string> = {
 
 export const KIND_FILTERS = ["pdf", "text", "image", "office", "archive", "other"] as const;
 
+/** 正文抽取状态；resources.status 只有可抽取类型才会离开 ready。 */
+export const STATUS_LABEL: Record<string, string> = {
+  pending: "待抽取",
+  processing: "抽取中",
+  ready: "可检索",
+  failed: "抽取失败",
+};
+
 export function isReadable(kind: string): boolean {
   return kind === "pdf" || kind === "text" || kind === "image";
+}
+
+/** 与桌面端抽取器保持一致：只有纯文本与 PDF 会进入正文抽取流程。 */
+export function isExtractableKind(kind: string): boolean {
+  return kind === "pdf" || kind === "text";
 }

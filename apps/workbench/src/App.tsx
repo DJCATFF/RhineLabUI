@@ -12,6 +12,7 @@ import { loadWorkspace, saveWorkspace, viewTitle } from "./workspace";
 import type {
   Facets,
   ImportProgress,
+  JobsSummary,
   NavView,
   ResourceDetail,
   ResourceItem,
@@ -41,6 +42,7 @@ export function App() {
   const [checked, setChecked] = useState<Set<string>>(() => new Set());
   const [readerId, setReaderId] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [batch, setBatch] = useState<"tag" | "collection" | null>(null);
@@ -83,6 +85,15 @@ export function App() {
     queryKey: ["resource", readerId],
     queryFn: () => api.get(readerId as string),
     enabled: hasLibrary && Boolean(readerId),
+  });
+  const jobsQuery = useQuery({
+    queryKey: ["jobs"],
+    queryFn: api.jobs,
+    enabled: hasLibrary,
+    refetchInterval: (query) => {
+      const data = query.state.data as JobsSummary | undefined;
+      return data && (data.pending > 0 || data.running > 0) ? 1200 : false;
+    },
   });
 
   const items = useMemo(() => listQuery.data?.items ?? [], [listQuery.data]);
@@ -139,6 +150,19 @@ export function App() {
     if (!bridge) return;
     return bridge.onImportProgress((next) => setProgress(next));
   }, []);
+
+  useEffect(() => {
+    const bridge = window.desk?.library;
+    if (!bridge) return;
+    return bridge.onJobsChanged(() => {
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      void queryClient.invalidateQueries({ queryKey: ["list"] });
+      void queryClient.invalidateQueries({ queryKey: ["facets"] });
+      if (workspace.selectedId) {
+        void queryClient.invalidateQueries({ queryKey: ["resource", workspace.selectedId] });
+      }
+    });
+  }, [queryClient, workspace.selectedId]);
 
   const selectView = useCallback((view: NavView) => {
     setWorkspace((current) => ({ ...current, view }));
@@ -207,6 +231,33 @@ export function App() {
     } finally {
       setImporting(false);
       setTimeout(() => setProgress(null), 1400);
+    }
+  };
+
+  const retrySelectedExtraction = async () => {
+    const id = workspace.selectedId;
+    if (!id) return;
+    try {
+      const result = await api.retryExtraction(id);
+      await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      await queryClient.invalidateQueries({ queryKey: ["resource", id] });
+      setToast(result.queued ? "已重新排队抽取正文" : "当前没有需要重试的抽取");
+    } catch (error) {
+      setToast(`重试失败：${errorText(error)}`);
+    }
+  };
+
+  const retryFailedExtractions = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      const result = await api.retryFailedExtractions();
+      await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      setToast(result.queued ? `已重新排队 ${result.queued} 项抽取` : "没有可重试的抽取任务");
+    } catch (error) {
+      setToast(`重试失败：${errorText(error)}`);
+    } finally {
+      setRetrying(false);
     }
   };
 
@@ -445,6 +496,10 @@ export function App() {
 
   const importPercent = progress && progress.total > 0 ? Math.round((progress.index / progress.total) * 100) : 0;
   const readerDetail = readerQuery.data ?? null;
+  const jobs = jobsQuery.data;
+  const jobsActive = jobs ? jobs.pending + jobs.running : 0;
+  const jobsPercent = jobs && jobs.total > 0 ? Math.round((jobs.done / jobs.total) * 100) : 0;
+  const showJobs = Boolean(jobs && (jobsActive > 0 || jobs.failed > 0));
 
   return (
     <div className={`app${workspace.detailOpen ? " with-detail" : ""}`}>
@@ -514,6 +569,7 @@ export function App() {
           onTrash={() => void trashedSelected()}
           onRestore={() => void restoredSelected()}
           onOpenCollection={(id) => selectView({ kind: "collection", id })}
+          onRetryExtraction={() => void retrySelectedExtraction()}
         />
       )}
 
@@ -611,6 +667,29 @@ export function App() {
           <span className="import-bar">
             <span style={{ width: `${progress.phase === "done" ? 100 : importPercent}%` }} />
           </span>
+        </div>
+      )}
+
+      {showJobs && jobs && (
+        <div className={`jobs-strip${progress ? " is-lifted" : ""}`}>
+          <span className={`import-phase${jobsActive > 0 ? "" : " is-failed"}`}>
+            {jobsActive > 0 ? "后台抽取" : "抽取失败"}
+          </span>
+          <span className="import-detail">
+            {jobsActive > 0
+              ? `待处理 ${jobs.pending} · 进行中 ${jobs.running} · 已完成 ${jobs.done}`
+              : `${jobs.failed} 项没有抽取成功`}
+          </span>
+          {jobsActive > 0 && (
+            <span className="import-bar">
+              <span style={{ width: `${jobsPercent}%` }} />
+            </span>
+          )}
+          {jobs.failed > 0 && (
+            <button type="button" className="jobs-retry" onClick={() => void retryFailedExtractions()} disabled={retrying}>
+              {retrying ? "排队中…" : "重试失败项"}
+            </button>
+          )}
         </div>
       )}
 

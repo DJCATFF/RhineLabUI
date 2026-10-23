@@ -5,6 +5,8 @@ import { openLibrary, nowIso } from "./db";
 import { kindOf } from "./importer";
 import { discardOriginals, originalIntact, saveOriginal, type StoredOriginal } from "./originals";
 import { createCollection } from "./store";
+import { queueExtraction } from "./jobs";
+import { isExtractable } from "./extract";
 
 export interface LegacyDocument {
   id: string;
@@ -122,6 +124,8 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
   };
   const tagNames = new Set<string>();
   const collectionNames = new Set<string>();
+  /** 本次新增或补齐了原件的资料，提交后统一排队抽取正文。 */
+  const pendingExtraction: string[] = [];
   let maxArchiveNo = 0;
 
   /**
@@ -201,6 +205,7 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
         }
         if (attachOriginal(id, doc, saved) === "attached") result.backfilled += 1;
         else result.skipped += 1;
+        pendingExtraction.push(id);
         continue;
       }
       if (plan !== "new") {
@@ -213,19 +218,22 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
 
       const fileName = doc.fileName ?? "";
       const ext = path.extname(fileName).toLowerCase();
+      const kind = kindOf(ext);
       const title = (doc.title || fileName || "未命名资料").trim();
+      const body = typeof doc.text === "string" && doc.text.trim() ? doc.text : null;
       if (!sourceId) throw new Error("旧库导入缺少来源记录");
       db.prepare(
         `INSERT INTO resources
            (id, archive_no, title, kind, status, favorite, extracted, summary, key_points,
             source_id, inbox, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'ready', 0, ?, ?, ?, ?, 1, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 1, ?, ?)`,
       ).run(
         id,
         archiveNo,
         title,
-        kindOf(ext),
-        doc.text ?? null,
+        kind,
+        body || !isExtractable(kind) ? "ready" : "pending",
+        body,
         doc.summary ?? null,
         JSON.stringify(Array.isArray(doc.keyPoints) ? doc.keyPoints : []),
         sourceId,
@@ -293,6 +301,7 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
       }
 
       maxArchiveNo = Math.max(maxArchiveNo, archiveNo);
+      pendingExtraction.push(id);
       result.added += 1;
     }
 
@@ -312,5 +321,6 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
 
   result.tags = tagNames.size;
   result.collections = collectionNames.size;
+  queueExtraction(pendingExtraction);
   return result;
 }

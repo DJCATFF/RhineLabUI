@@ -25,6 +25,9 @@
       "dist/**/*",
       "src/index.html"
     ],
+    "asarUnpack": [
+      "node_modules/pdfjs-dist/**"
+    ],
     "extraResources": [
       {
         "from": "../workbench/dist",
@@ -36,5 +39,8 @@
         "nsis"
       ]
     }
+  },
+  "dependencies": {
+    "pdfjs-dist": "^5.7.284"
   }
 }

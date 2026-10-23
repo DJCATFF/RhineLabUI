@@ -785,6 +785,21 @@ img {
   font-size: 9.5px;
 }
 
+.badge-status.is-pending {
+  background: #f1ece4;
+  color: var(--warning);
+}
+
+.badge-status.is-processing {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.badge-status.is-failed {
+  background: #f6e7e4;
+  color: var(--danger);
+}
+
 .tag-chip {
   flex: none;
   max-width: 96px;
@@ -1376,6 +1391,10 @@ img {
   color: var(--text-muted);
   font-size: 11.5px;
   line-height: 1.75;
+}
+
+.block-placeholder.is-failed {
+  color: var(--danger);
 }
 
 .chip-list {
@@ -2210,7 +2229,8 @@ img {
 
 /* ---------- 导入进度 ---------- */
 
-.import-strip {
+.import-strip,
+.jobs-strip {
   position: fixed;
   left: 254px;
   bottom: 18px;
@@ -2225,6 +2245,10 @@ img {
   background: var(--surface-panel);
   box-shadow: var(--shadow-panel);
   animation: rise-flat 160ms ease;
+}
+
+.jobs-strip.is-lifted {
+  bottom: 62px;
 }
 
 @keyframes rise-flat {
@@ -2243,6 +2267,10 @@ img {
   color: var(--accent);
   font-size: 11px;
   font-weight: 600;
+}
+
+.import-phase.is-failed {
+  color: var(--danger);
 }
 
 .import-detail {
@@ -2270,6 +2298,24 @@ img {
   border-radius: 2px;
   background: var(--accent);
   transition: width 180ms ease;
+}
+
+.jobs-retry {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--accent);
+  font-size: 10.5px;
+}
+
+.jobs-retry:hover:not(:disabled) {
+  border-color: #b9cfc8;
+}
+
+.jobs-retry:disabled {
+  color: var(--text-muted);
 }
 
 /* ---------- 提示 ---------- */

@@ -1,4 +1,4 @@
-import type { Facets, ImportResult, ListParams, ListResult, ResourceDetail } from "./types";
+import type { Facets, ImportResult, JobsSummary, ListParams, ListResult, ResourceDetail } from "./types";
 
 function library() {
   const bridge = window.desk?.library;
@@ -23,6 +23,9 @@ export const api = {
   open: (id: string) => library().open(id),
   reveal: (id: string) => library().reveal(id),
   importFolder: () => library().importFolder() as Promise<ImportResult>,
+  jobs: () => library().jobs() as Promise<JobsSummary>,
+  retryExtraction: (id: string) => library().retryExtraction(id),
+  retryFailedExtractions: () => library().retryFailedExtractions(),
 };
 
 function toBase64Url(input: string): string {

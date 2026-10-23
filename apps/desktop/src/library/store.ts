@@ -1,5 +1,7 @@
 import { openLibrary, nextArchiveNo, nowIso } from "./db";
 import { discardOriginals, originalIntact, originalsDir, saveOriginal, type StoredOriginal } from "./originals";
+import { EXTRACT_JOB, queueExtraction } from "./jobs";
+import { isExtractable } from "./extract";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 
@@ -224,6 +226,14 @@ export function getResource(id: string) {
     extracted: string | null;
   };
 
+  const job = db
+    .prepare(
+      "SELECT id, status, attempts, error, updated_at FROM jobs WHERE resource_id = ? AND type = ? ORDER BY created_at DESC LIMIT 1",
+    )
+    .get(id, EXTRACT_JOB) as
+    | { id: string; status: string; attempts: number; error: string | null; updated_at: string }
+    | undefined;
+
   return {
     ...toItem(row),
     note: text.note,
@@ -234,6 +244,9 @@ export function getResource(id: string) {
     tagDetails: tags,
     reading: reading ?? null,
     source: source ?? null,
+    job: job
+      ? { id: job.id, status: job.status, attempts: job.attempts, error: job.error, updatedAt: job.updated_at }
+      : null,
   };
 }
 
@@ -512,8 +525,17 @@ export async function registerImport(options: {
         const resourceId = randomUUID();
         db.prepare(
           `INSERT INTO resources (id, archive_no, title, kind, status, favorite, inbox, source_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'ready', 0, 1, ?, ?, ?)`,
-        ).run(resourceId, nextArchiveNo(), file.title, file.kind, sourceId, stamp, stamp);
+           VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?, ?)`,
+        ).run(
+          resourceId,
+          nextArchiveNo(),
+          file.title,
+          file.kind,
+          isExtractable(file.kind) ? "pending" : "ready",
+          sourceId,
+          stamp,
+          stamp,
+        );
         db.prepare(
           `INSERT INTO files (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
            VALUES (?, ?, 'managed', ?, ?, ?, ?, ?, ?)`,
@@ -522,6 +544,7 @@ export async function registerImport(options: {
       }
 
       db.exec("COMMIT");
+      queueExtraction(ids);
       return { sourceId, added: ids.length, duplicates, failed, repaired, ids };
     } catch (error) {
       db.exec("ROLLBACK");

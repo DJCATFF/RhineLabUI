@@ -1,5 +1,5 @@
 import type { NavView, ResourceItem, SortKind, ViewMode } from "../types";
-import { KIND_FILTERS, KIND_LABEL, isReadable } from "../types";
+import { KIND_FILTERS, KIND_LABEL, STATUS_LABEL, isExtractableKind, isReadable } from "../types";
 import { archiveLabel, assetUrl, formatDate, formatSize } from "../api";
 import { SORT_LABEL } from "../workspace";
 import { PdfThumb } from "./Preview";
@@ -53,12 +53,20 @@ function matchReason(item: ResourceItem, search: string): string | null {
   return "正文待索引";
 }
 
+function statusBadge(item: ResourceItem) {
+  if (!isExtractableKind(item.kind)) return null;
+  const label = STATUS_LABEL[item.status];
+  if (!label || item.status === "ready") return null;
+  return <span className={`badge-soft badge-status is-${item.status}`}>{label}</span>;
+}
+
 function rowSub(item: ResourceItem, search: string) {
   const reason = matchReason(item, search);
   return (
     <div className="row-sub">
       <span className="row-no">{archiveLabel(item.archiveNo)}</span>
       {item.inbox && <span className="badge-soft">收件箱</span>}
+      {statusBadge(item)}
       {item.tags.slice(0, 3).map((tag) => (
         <span key={tag} className="tag-chip">
           {tag}
@@ -373,6 +381,7 @@ export function ResourceView(props: ResourceViewProps) {
                     <div className="card-meta">
                       <span>{KIND_LABEL[item.kind] ?? "文件"}</span>
                       <span>{formatSize(item.size)}</span>
+                      {statusBadge(item)}
                       {item.favorite && <IconStar size={12} filled />}
                     </div>
                     {!!item.tags.length && (

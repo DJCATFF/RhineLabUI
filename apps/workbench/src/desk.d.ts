@@ -2,6 +2,7 @@ import type {
   Facets,
   ImportProgress,
   ImportResult,
+  JobsSummary,
   ListParams,
   ListResult,
   ResourceDetail,
@@ -40,6 +41,10 @@ export interface DeskLibrary {
   reveal: (id: string) => Promise<boolean>;
   importFolder: () => Promise<ImportResult>;
   onImportProgress: (callback: (progress: ImportProgress) => void) => () => void;
+  jobs: () => Promise<JobsSummary>;
+  retryExtraction: (id: string) => Promise<{ queued: number; jobs: JobsSummary }>;
+  retryFailedExtractions: () => Promise<{ queued: number; jobs: JobsSummary }>;
+  onJobsChanged: (callback: (summary: JobsSummary) => void) => () => void;
 }
 
 declare global {

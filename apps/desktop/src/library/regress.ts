@@ -4,6 +4,14 @@ import * as path from "node:path";
 import { app } from "electron";
 import { openLibrary } from "./db";
 import { importFolder } from "./importer";
+import {
+  EXTRACT_JOB,
+  jobsSummary,
+  queueExtraction,
+  recoverInterruptedJobs,
+  retryExtraction,
+  runExtractionQueue,
+} from "./jobs";
 import { importLegacyExport } from "./legacy";
 import { originalIntact, originalsDir } from "./originals";
 
@@ -13,8 +21,33 @@ interface CheckResult {
   detail?: string;
 }
 
+/** 生成一份最小但结构合法的文本型 PDF，用于回归正文抽取。 */
+function buildPdf(text: string): Buffer {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  const stream = `BT /F1 16 Tf 20 100 Td (${text}) Tj ET`;
+  objects.push(`<< /Length ${Buffer.byteLength(stream, "ascii")} >>\nstream\n${stream}\nendstream`);
+
+  let body = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  for (let index = 0; index < objects.length; index += 1) {
+    offsets.push(Buffer.byteLength(body, "ascii"));
+    body += `${index + 1} 0 obj\n${objects[index]}\nendobj\n`;
+  }
+  const startxref = Buffer.byteLength(body, "ascii");
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f\r\n`;
+  for (const offset of offsets) body += `${String(offset).padStart(10, "0")} 00000 n\r\n`;
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${startxref}\n%%EOF\n`;
+  return Buffer.from(body, "ascii");
+}
+
 /**
- * 原件保存的针对性回归：重复导入、同内容不同条目、损坏后重导、先正文后补原件。
+ * 原件保存与正文抽取的针对性回归：重复导入、同内容不同条目、损坏后重导、先正文后补原件，
+ * 以及导入建任务、文本/PDF 抽取、失败重试、强制退出后继续处理。
  * 只写入 --user-data-dir 指定的临时资料库，不触碰正式数据。
  */
 export async function runLibraryRegression(): Promise<void> {
@@ -302,6 +335,160 @@ export async function runLibraryRegression(): Promise<void> {
         directLinks.every((link) => link.storage_kind === "managed" && link.path.startsWith(originalsDir())) &&
         (await originalIntact(directLinks[0].path, { sha256: sharedSha, size: sharedBody.length })),
       JSON.stringify(directLinks),
+    );
+
+    // 7. 可恢复的正文抽取：导入建任务、文本/PDF 抽取、失败重试、强制退出后继续处理。
+    const extractDir = path.join(root, "extract");
+    await mkdir(extractDir, { recursive: true });
+    const noteText = "Rhine Lab extraction note body.";
+    const guideText = "# 抽取指南\n\nMarkdown 正文也应被抽取。";
+    await writeFile(path.join(extractDir, "note.txt"), Buffer.from(noteText, "utf8"));
+    await writeFile(path.join(extractDir, "guide.md"), Buffer.from(guideText, "utf8"));
+    await writeFile(path.join(extractDir, "paper.pdf"), buildPdf("Rhine Lab PDF extraction sample"));
+    await writeFile(path.join(extractDir, "broken.pdf"), Buffer.from("%PDF-1.4\nnot a real document\n", "ascii"));
+
+    const stateOf = (id: string) =>
+      db.prepare("SELECT status, extracted FROM resources WHERE id = ?").get(id) as {
+        status: string;
+        extracted: string | null;
+      };
+    const jobOf = (id: string) =>
+      db
+        .prepare(
+          "SELECT status, attempts, lease_until, error FROM jobs WHERE resource_id = ? AND type = ? ORDER BY created_at DESC LIMIT 1",
+        )
+        .get(id, EXTRACT_JOB) as
+        | { status: string; attempts: number; lease_until: string | null; error: string | null }
+        | undefined;
+    const jobsOf = (id: string) =>
+      one("SELECT COUNT(*) AS n FROM jobs WHERE resource_id = ? AND type = ?", id, EXTRACT_JOB);
+    const textOf = (id: string) => stateOf(id).extracted ?? "";
+
+    const extractImport = await importFolder(extractDir, noop);
+    check("抽取入队：导入 4 项", extractImport.added === 4, JSON.stringify(extractImport));
+    const extractSource = db
+      .prepare("SELECT id FROM sources WHERE kind = 'folder' AND root_path = ? LIMIT 1")
+      .get(extractDir) as { id: string } | undefined;
+    const extractRows = db
+      .prepare("SELECT id, title, status FROM resources WHERE source_id = ?")
+      .all(extractSource?.id ?? "") as { id: string; title: string; status: string }[];
+    const findResource = (title: string) => {
+      const row = extractRows.find((item) => item.title === title);
+      if (!row) throw new Error(`缺少导入条目：${title}`);
+      return row;
+    };
+    check(
+      "抽取入队：导入后 4 项均为待抽取",
+      extractRows.length === 4 && extractRows.every((item) => item.status === "pending"),
+      JSON.stringify(extractRows),
+    );
+    check(
+      "抽取入队：4 项都建立持久化任务",
+      extractRows.length === 4 && extractRows.every((item) => jobOf(item.id)?.status === "pending"),
+    );
+
+    const note = findResource("note");
+    const guide = findResource("guide");
+    const paper = findResource("paper");
+    const broken = findResource("broken");
+    await runExtractionQueue();
+
+    check(
+      "文本抽取：TXT 正文写入且状态可检索",
+      stateOf(note.id).status === "ready" &&
+        textOf(note.id) === noteText &&
+        jobOf(note.id)?.status === "done",
+      JSON.stringify(stateOf(note.id)),
+    );
+    check(
+      "文本抽取：Markdown 正文写入",
+      stateOf(guide.id).status === "ready" && textOf(guide.id).includes("Markdown 正文也应被抽取"),
+      JSON.stringify(stateOf(guide.id)),
+    );
+    check(
+      "PDF 抽取：文本型 PDF 写入正文",
+      stateOf(paper.id).status === "ready" && textOf(paper.id).includes("Rhine Lab PDF extraction sample"),
+      JSON.stringify({ status: stateOf(paper.id).status, text: textOf(paper.id) }),
+    );
+    check(
+      "抽取失败：损坏 PDF 记为失败并保留原因",
+      stateOf(broken.id).status === "failed" &&
+        jobOf(broken.id)?.status === "failed" &&
+        Boolean(jobOf(broken.id)?.error),
+      JSON.stringify(jobOf(broken.id)),
+    );
+    const beforeRetry = jobsSummary();
+    check(
+      "抽取统计：失败 1、无待处理",
+      beforeRetry.failed === 1 && beforeRetry.pending === 0,
+      JSON.stringify(beforeRetry),
+    );
+    check("抽取入队：已完成的资料不再重复建任务", queueExtraction([note.id]) === 0);
+
+    const brokenFile = db
+      .prepare("SELECT path FROM files WHERE resource_id = ? AND storage_kind = 'managed' LIMIT 1")
+      .get(broken.id) as { path: string };
+    await writeFile(brokenFile.path, buildPdf("Recovered PDF extraction after retry"));
+    check("失败重试：重新入队 1 条", retryExtraction(broken.id) === 1);
+    check(
+      "失败重试：任务复位为待处理并清空错误",
+      jobOf(broken.id)?.status === "pending" &&
+        jobOf(broken.id)?.error === null &&
+        stateOf(broken.id).status === "pending",
+      JSON.stringify(jobOf(broken.id)),
+    );
+    await runExtractionQueue();
+    check(
+      "失败重试：重新抽取成功",
+      stateOf(broken.id).status === "ready" &&
+        textOf(broken.id).includes("Recovered PDF extraction after retry") &&
+        jobOf(broken.id)?.status === "done",
+      JSON.stringify({ status: stateOf(broken.id).status, text: textOf(broken.id) }),
+    );
+
+    const resumeDir = path.join(root, "extract-resume");
+    await mkdir(resumeDir, { recursive: true });
+    const resumeText = "resume extraction after forced quit";
+    await writeFile(path.join(resumeDir, "resume.txt"), Buffer.from(resumeText, "utf8"));
+    const resumeImport = await importFolder(resumeDir, noop);
+    const resumeRow = db
+      .prepare("SELECT r.id FROM resources r JOIN sources s ON s.id = r.source_id WHERE s.root_path = ?")
+      .get(resumeDir) as { id: string };
+    check(
+      "中断恢复：导入后创建待处理任务",
+      resumeImport.added === 1 && jobOf(resumeRow.id)?.status === "pending",
+      JSON.stringify(resumeImport),
+    );
+
+    db.prepare("UPDATE jobs SET status = 'running', lease_until = ? WHERE resource_id = ? AND type = ?").run(
+      new Date(Date.now() - 60_000).toISOString(),
+      resumeRow.id,
+      EXTRACT_JOB,
+    );
+    db.prepare("UPDATE resources SET status = 'processing' WHERE id = ?").run(resumeRow.id);
+    check(
+      "中断恢复：前置条件为执行中且租约过期",
+      jobOf(resumeRow.id)?.status === "running" && stateOf(resumeRow.id).status === "processing",
+    );
+    check("中断恢复：启动时复位中断任务", recoverInterruptedJobs() >= 1);
+    check(
+      "中断恢复：任务回到待处理并清空租约",
+      jobOf(resumeRow.id)?.status === "pending" &&
+        jobOf(resumeRow.id)?.lease_until === null &&
+        stateOf(resumeRow.id).status === "pending",
+      JSON.stringify(jobOf(resumeRow.id)),
+    );
+    check(
+      "中断恢复：重复恢复不重复建任务",
+      recoverInterruptedJobs() === 0 && jobsOf(resumeRow.id) === 1,
+    );
+    await runExtractionQueue();
+    check(
+      "中断恢复：重启后继续完成抽取",
+      stateOf(resumeRow.id).status === "ready" &&
+        textOf(resumeRow.id) === resumeText &&
+        jobOf(resumeRow.id)?.status === "done",
+      JSON.stringify(stateOf(resumeRow.id)),
     );
   } finally {
     const failed = checks.filter((item) => !item.ok);

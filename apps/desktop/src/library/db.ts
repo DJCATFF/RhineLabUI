@@ -107,6 +107,7 @@ CREATE INDEX IF NOT EXISTS resources_status_idx ON resources (deleted_at, create
 CREATE INDEX IF NOT EXISTS resources_kind_idx ON resources (kind);
 CREATE INDEX IF NOT EXISTS files_resource_idx ON files (resource_id);
 CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs (status, created_at);
+CREATE INDEX IF NOT EXISTS jobs_resource_idx ON jobs (resource_id);
 `;
 
 export function libraryPath(): string {

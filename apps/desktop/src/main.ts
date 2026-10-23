@@ -8,6 +8,14 @@ import { importFolder } from "./library/importer";
 import { importLegacyExport } from "./library/legacy";
 import { runLibraryRegression } from "./library/regress";
 import {
+  jobsSummary,
+  onJobsChanged,
+  recoverInterruptedJobs,
+  retryExtraction,
+  retryFailedExtractions,
+  runExtractionQueue,
+} from "./library/jobs";
+import {
   createCollection,
   facets,
   findRegisteredFile,
@@ -100,6 +108,8 @@ if (!app.requestSingleInstanceLock()) {
         });
         console.log("IMPORT_RESULT " + JSON.stringify(result));
       }
+      await runExtractionQueue();
+      console.log("EXTRACT_JOBS " + JSON.stringify(jobsSummary()));
       if (shot) {
         await runWorkbenchShot(shot.slice("--shot=".length));
       } else {
@@ -109,7 +119,10 @@ if (!app.requestSingleInstanceLock()) {
     }
 
     openLibrary();
+    onJobsChanged(broadcastJobs);
+    recoverInterruptedJobs();
     createWindow();
+    void runExtractionQueue();
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
@@ -479,7 +492,30 @@ ipcMain.handle("library:import", async () => {
     properties: ["openDirectory"],
   });
   if (result.canceled || !result.filePaths[0]) return { canceled: true };
-  return importFolder(result.filePaths[0], (progress) => {
+  const summary = await importFolder(result.filePaths[0], (progress) => {
     win?.webContents.send("library:import-progress", progress);
   });
+  void runExtractionQueue();
+  return summary;
 });
+
+ipcMain.handle("library:jobs", () => jobsSummary());
+
+ipcMain.handle("library:retry", (_event, id: string) => {
+  const queued = retryExtraction(id);
+  if (queued > 0) void runExtractionQueue();
+  return { queued, jobs: jobsSummary() };
+});
+
+ipcMain.handle("library:retry-all", () => {
+  const queued = retryFailedExtractions();
+  if (queued > 0) void runExtractionQueue();
+  return { queued, jobs: jobsSummary() };
+});
+
+function broadcastJobs(): void {
+  const summary = jobsSummary();
+  for (const target of BrowserWindow.getAllWindows()) {
+    target.webContents.send("library:jobs-changed", summary);
+  }
+}
