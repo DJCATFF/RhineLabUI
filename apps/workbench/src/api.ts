@@ -24,6 +24,8 @@ export const api = {
   reveal: (id: string) => library().reveal(id),
   importFolder: () => library().importFolder() as Promise<ImportResult>,
   jobs: () => library().jobs() as Promise<JobsSummary>,
+  rebuildIndex: () => library().rebuildIndex(),
+  indexStatus: () => library().indexStatus(),
   retryExtraction: (id: string) => library().retryExtraction(id),
   retryFailedExtractions: () => library().retryFailedExtractions(),
 };

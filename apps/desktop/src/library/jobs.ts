@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { openLibrary, nowIso } from "./db";
 import { isExtractable, type ExtractLimits, type ExtractResult } from "./extract";
+import { reindexResource } from "./search";
 import { ExtractionCancelled, extractInWorker } from "../extract-runner";
 
 export const EXTRACT_JOB = "extract_text";
@@ -196,8 +197,17 @@ export function completeJob(
     }
     db.prepare(
       `UPDATE resources SET extracted = ?, status = 'ready', extract_truncated = ?, extract_pages = ?,
-              extract_page_total = ?, updated_at = ? WHERE id = ?`,
-    ).run(result.text, result.truncated, result.pages, result.pageTotal, stamp, resourceId);
+              extract_page_total = ?, extract_page_offsets = ?, updated_at = ? WHERE id = ?`,
+    ).run(
+      result.text,
+      result.truncated,
+      result.pages,
+      result.pageTotal,
+      JSON.stringify(result.pageOffsets),
+      stamp,
+      resourceId,
+    );
+    reindexResource(resourceId, db);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");

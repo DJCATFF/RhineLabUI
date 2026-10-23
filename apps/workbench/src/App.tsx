@@ -12,6 +12,7 @@ import { loadWorkspace, saveWorkspace, viewTitle } from "./workspace";
 import type {
   Facets,
   ImportProgress,
+  IndexStatus,
   JobsSummary,
   NavView,
   ResourceDetail,
@@ -41,8 +42,10 @@ export function App() {
   const [search, setSearch] = useState(workspace.search.trim());
   const [checked, setChecked] = useState<Set<string>>(() => new Set());
   const [readerId, setReaderId] = useState<string | null>(null);
+  const [readerLocator, setReaderLocator] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [rebuildingIndex, setRebuildingIndex] = useState(false);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [batch, setBatch] = useState<"tag" | "collection" | null>(null);
@@ -93,6 +96,15 @@ export function App() {
     refetchInterval: (query) => {
       const data = query.state.data as JobsSummary | undefined;
       return data && (data.pending > 0 || data.running > 0) ? 1200 : false;
+    },
+  });
+  const indexQuery = useQuery({
+    queryKey: ["index-status"],
+    queryFn: api.indexStatus,
+    enabled: hasLibrary,
+    refetchInterval: (query) => {
+      const data = query.state.data as IndexStatus | undefined;
+      return data && !data.ready ? 4000 : false;
     },
   });
 
@@ -170,12 +182,14 @@ export function App() {
 
   const openReader = useCallback((item: ResourceItem) => {
     setWorkspace((current) => ({ ...current, selectedId: item.id }));
+    setReaderLocator(item.hit?.locator ?? null);
     setReaderId(item.id);
     if (window.desk?.library) void api.touch(item.id).catch(() => undefined);
   }, []);
 
   const closeReader = useCallback(() => {
     setReaderId(null);
+    setReaderLocator(null);
     void refreshLibrary();
   }, [refreshLibrary]);
 
@@ -258,6 +272,21 @@ export function App() {
       setToast(`重试失败：${errorText(error)}`);
     } finally {
       setRetrying(false);
+    }
+  };
+
+  const rebuildIndex = async () => {
+    if (!hasLibrary || rebuildingIndex) return;
+    setRebuildingIndex(true);
+    try {
+      const result = await api.rebuildIndex();
+      queryClient.setQueryData(["index-status"], result.status);
+      await queryClient.invalidateQueries({ queryKey: ["list"] });
+      setToast(`已重建 ${result.indexed} 项资料的搜索索引`);
+    } catch (error) {
+      setToast(`重建索引失败：${errorText(error)}`);
+    } finally {
+      setRebuildingIndex(false);
     }
   };
 
@@ -510,8 +539,11 @@ export function App() {
         view={workspace.view}
         facets={facets}
         libraryPath={infoQuery.data?.path ?? null}
+        indexStatus={indexQuery.data}
+        rebuildingIndex={rebuildingIndex}
         onSelect={selectView}
         onCreateCollection={(name) => void createCollection(name)}
+        onRebuildIndex={() => void rebuildIndex()}
       />
 
       <div className="stage">
@@ -579,6 +611,7 @@ export function App() {
       {readerId && readerDetail && (
         <Reader
           detail={readerDetail}
+          startLocator={readerLocator}
           onClose={closeReader}
           onReading={handleReading}
           onOpenOriginal={openOriginal}

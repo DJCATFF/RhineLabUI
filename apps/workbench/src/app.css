@@ -261,6 +261,44 @@ img {
   border-top: 1px solid var(--line);
 }
 
+.nav-index {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px 0;
+}
+
+.nav-index-text {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav-index-btn {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.nav-index-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.nav-index-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .library-path {
   padding: 6px 8px 0;
   color: var(--text-muted);
@@ -819,9 +857,35 @@ img {
 }
 
 .match-reason {
-  flex: none;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
   color: var(--accent);
   font-size: 9.5px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.match-reason > span {
+  flex: none;
+}
+
+.match-reason em {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-style: normal;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.match-reason mark {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 2px;
+  padding: 0 1px;
 }
 
 .col-size,

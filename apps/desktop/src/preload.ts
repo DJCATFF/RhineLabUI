@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld("desk", {
       return () => ipcRenderer.removeListener("library:import-progress", listener);
     },
     jobs: (): Promise<unknown> => ipcRenderer.invoke("library:jobs"),
+    rebuildIndex: (): Promise<unknown> => ipcRenderer.invoke("library:rebuild-index"),
+    indexStatus: (): Promise<unknown> => ipcRenderer.invoke("library:index-status"),
     retryExtraction: (id: string): Promise<unknown> => ipcRenderer.invoke("library:retry", id),
     retryFailedExtractions: (): Promise<unknown> => ipcRenderer.invoke("library:retry-all"),
     onJobsChanged: (callback: (summary: unknown) => void): (() => void) => {

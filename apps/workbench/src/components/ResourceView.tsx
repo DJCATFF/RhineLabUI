@@ -43,16 +43,6 @@ interface ResourceViewProps {
   onBatch: (action: BatchAction) => void;
 }
 
-function matchReason(item: ResourceItem, search: string): string | null {
-  const needle = search.trim().toLowerCase();
-  if (!needle) return null;
-  if (item.title.toLowerCase().includes(needle)) return "标题匹配";
-  const tag = item.tags.find((name) => name.toLowerCase().includes(needle));
-  if (tag) return `标签：${tag}`;
-  if (item.path?.toLowerCase().includes(needle)) return "路径匹配";
-  return "正文待索引";
-}
-
 function statusBadge(item: ResourceItem) {
   if (!isExtractableKind(item.kind)) return null;
   const label = STATUS_LABEL[item.status];
@@ -60,8 +50,26 @@ function statusBadge(item: ResourceItem) {
   return <span className={`badge-soft badge-status is-${item.status}`}>{label}</span>;
 }
 
-function rowSub(item: ResourceItem, search: string) {
-  const reason = matchReason(item, search);
+/** 在命中片段里标出关键词；大小写不敏感，找不到时原样返回。 */
+function highlight(text: string, keyword: string) {
+  const needle = keyword.toLowerCase();
+  if (!needle) return text;
+  const lower = text.toLowerCase();
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  let index = lower.indexOf(needle);
+  while (index >= 0) {
+    if (index > cursor) nodes.push(text.slice(cursor, index));
+    nodes.push(<mark key={index}>{text.slice(index, index + keyword.length)}</mark>);
+    cursor = index + keyword.length;
+    index = lower.indexOf(needle, cursor);
+  }
+  if (nodes.length === 0) return text;
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
+}
+
+function rowSub(item: ResourceItem) {
   return (
     <div className="row-sub">
       <span className="row-no">{archiveLabel(item.archiveNo)}</span>
@@ -73,7 +81,16 @@ function rowSub(item: ResourceItem, search: string) {
         </span>
       ))}
       {item.tags.length > 3 && <span className="tag-more">+{item.tags.length - 3}</span>}
-      {reason && <span className="match-reason">{reason}</span>}
+      {item.hit && (
+        <span className="match-reason" title={item.hit.snippet}>
+          <span>{item.hit.label}</span>
+          {item.hit.snippet && (
+            <em>
+              {highlight(item.hit.snippet, item.hit.keyword)}
+            </em>
+          )}
+        </span>
+      )}
     </div>
   );
 }
@@ -283,7 +300,7 @@ export function ResourceView(props: ResourceViewProps) {
                   <p className="row-title" title={item.title}>
                     {item.title}
                   </p>
-                  {rowSub(item, search)}
+                  {rowSub(item)}
                 </div>
 
                 <span className="col-size">{formatSize(item.size)}</span>

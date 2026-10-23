@@ -16,6 +16,7 @@ import {
   runExtractionQueue,
 } from "./library/jobs";
 import { extractWorkerPid, shutdownExtraction } from "./extract-runner";
+import { ensureSearchIndex, indexStatus, rebuildSearchIndex } from "./library/search";
 import {
   createCollection,
   facets,
@@ -99,6 +100,7 @@ if (!app.requestSingleInstanceLock()) {
     const legacyFile = process.argv.find((arg) => arg.startsWith("--import-legacy="));
     if (shot || importRoot || legacyFile) {
       openLibrary();
+      console.log("SEARCH_INDEX " + JSON.stringify(ensureSearchIndex()));
       if (legacyFile) {
         const result = await importLegacyExport(legacyFile.slice("--import-legacy=".length));
         console.log("LEGACY_IMPORT_RESULT " + JSON.stringify(result));
@@ -129,6 +131,7 @@ if (!app.requestSingleInstanceLock()) {
     }
 
     openLibrary();
+    console.log("SEARCH_INDEX " + JSON.stringify(ensureSearchIndex()));
     onJobsChanged(broadcastJobs);
     recoverInterruptedJobs();
     createWindow();
@@ -531,6 +534,10 @@ ipcMain.handle("library:import", async () => {
 });
 
 ipcMain.handle("library:jobs", () => jobsState());
+
+ipcMain.handle("library:rebuild-index", () => ({ indexed: rebuildSearchIndex(), status: indexStatus() }));
+
+ipcMain.handle("library:index-status", () => indexStatus());
 
 ipcMain.handle("library:retry", (_event, id: string) => {
   const queued = retryExtraction(id);

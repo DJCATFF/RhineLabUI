@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Facets, NavView } from "../types";
+import type { Facets, IndexStatus, NavView } from "../types";
 import {
   IconClock,
   IconCollection,
@@ -15,8 +15,11 @@ interface SidebarProps {
   view: NavView;
   facets: Facets | undefined;
   libraryPath: string | null;
+  indexStatus: IndexStatus | undefined;
+  rebuildingIndex: boolean;
   onSelect: (view: NavView) => void;
   onCreateCollection: (name: string) => void;
+  onRebuildIndex: () => void;
 }
 
 function NavRow({
@@ -43,7 +46,16 @@ function NavRow({
   );
 }
 
-export function Sidebar({ view, facets, libraryPath, onSelect, onCreateCollection }: SidebarProps) {
+export function Sidebar({
+  view,
+  facets,
+  libraryPath,
+  indexStatus,
+  rebuildingIndex,
+  onSelect,
+  onCreateCollection,
+  onRebuildIndex,
+}: SidebarProps) {
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState("");
 
@@ -178,6 +190,23 @@ export function Sidebar({ view, facets, libraryPath, onSelect, onCreateCollectio
           count={facets?.trash}
           onClick={() => onSelect({ kind: "trash" })}
         />
+        <div className="nav-index">
+          <span className="nav-index-text" title="搜索索引状态">
+            {indexStatus
+              ? indexStatus.ready
+                ? `已索引 ${indexStatus.indexed} 项`
+                : `索引 ${indexStatus.indexed}/${indexStatus.total}`
+              : "索引状态未知"}
+          </span>
+          <button
+            type="button"
+            className="nav-index-btn"
+            onClick={onRebuildIndex}
+            disabled={rebuildingIndex || !indexStatus}
+          >
+            {rebuildingIndex ? "重建中…" : "重建"}
+          </button>
+        </div>
         <p className="library-path" title={libraryPath ?? undefined}>
           {libraryPath ?? "资料库未连接"}
         </p>

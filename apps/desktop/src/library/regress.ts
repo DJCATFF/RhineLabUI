@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { app } from "electron";
-import { openLibrary } from "./db";
+import { closeLibrary, openLibrary } from "./db";
 import { importFolder } from "./importer";
 import {
   EXTRACT_JOB,
@@ -16,6 +16,8 @@ import {
 } from "./jobs";
 import { importLegacyExport } from "./legacy";
 import { originalIntact, originalsDir } from "./originals";
+import { SEARCH_INDEX_VERSION, ensureSearchIndex, indexStatus, rebuildSearchIndex } from "./search";
+import { listResources, moveToTrash, restoreFromTrash, setResourceTags, updateResource } from "./store";
 import { extractWorkerPid } from "../extract-runner";
 
 interface CheckResult {
@@ -26,6 +28,12 @@ interface CheckResult {
 
 /** 生成结构合法的多页文本型 PDF，用于回归正文抽取与限额、响应性验证。 */
 function buildPdf(text: string, pageCount = 1): Buffer {
+  return buildPdfPages(Array.from({ length: pageCount }, () => text));
+}
+
+/** 逐页指定文本，用于验证正文命中的页码定位。 */
+function buildPdfPages(pages: string[]): Buffer {
+  const pageCount = Math.max(pages.length, 1);
   const objects: string[] = ["<< /Type /Catalog /Pages 2 0 R >>"];
   const fontId = 3 + pageCount * 2;
   const pageIds = Array.from({ length: pageCount }, (_, index) => 3 + index * 2);
@@ -37,7 +45,7 @@ function buildPdf(text: string, pageCount = 1): Buffer {
     objects.push(
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentId} 0 R >>`,
     );
-    const stream = `BT /F1 16 Tf 20 100 Td (${text} page ${index + 1}) Tj ET`;
+    const stream = `BT /F1 16 Tf 20 100 Td (${pages[index] ?? ""} page ${index + 1}) Tj ET`;
     objects.push(`<< /Length ${Buffer.byteLength(stream, "ascii")} >>\nstream\n${stream}\nendstream`);
   }
   objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
@@ -641,7 +649,15 @@ export async function runLibraryRegression(): Promise<void> {
     const crashJobRow = db
       .prepare("SELECT id, attempts FROM jobs WHERE resource_id = ? AND type = ? ORDER BY created_at DESC LIMIT 1")
       .get(crashId, EXTRACT_JOB) as { id: string; attempts: number };
-    const staleResult = { text: "迟到结果", truncated: null, pages: 1, pageTotal: 1, bytes: 0, sha256: "" };
+    const staleResult = {
+      text: "迟到结果",
+      truncated: null,
+      pages: 1,
+      pageTotal: 1,
+      pageOffsets: [0],
+      bytes: 0,
+      sha256: "",
+    };
     check(
       "迟到结果：旧尝试不能写入正文",
       completeJob(crashJobRow.id, crashId, crashJobRow.attempts - 1, staleResult) === false &&
@@ -708,6 +724,153 @@ export async function runLibraryRegression(): Promise<void> {
         jobOf(repairId)?.status === "done" &&
         jobsOf(repairId) === 1,
       JSON.stringify({ ...stateOf(repairId), jobs: jobsOf(repairId) }),
+    );
+
+    // 9. 全文搜索：文件名不含关键词时也能命中正文，并给出片段、页码与定位。
+    const manualId = await importOne(
+      "manual.pdf",
+      buildPdfPages(["Rhine manual introduction", "Rhine manual installation", "Rhine manual torque 42"]),
+    );
+    const scanText = "起重机巡检记录\n设备型号 QD-32-5t，读数 98.6 度，扭矩 42 N·m。\n由王工复核。";
+    const scanId = await importOne("QD-32-5t.txt", Buffer.from(scanText, "utf8"));
+    await runExtractionQueue();
+
+    const search = (text: string, extra: { limit?: number; offset?: number; view?: "all" | "trash" } = {}) =>
+      listResources({ view: extra.view ?? "all", search: text, limit: extra.limit ?? 50, offset: extra.offset ?? 0 });
+    const hitOf = (text: string, id: string) => search(text).items.find((item) => item.id === id)?.hit ?? null;
+
+    updateResource(scanId, { title: "设备巡检记录" });
+    const bodyResult = search("起重");
+    const bodyHit = bodyResult.items.find((item) => item.id === scanId);
+    check(
+      "全文搜索：标题与文件名都不含关键词时命中正文",
+      bodyResult.total === 1 &&
+        bodyHit?.hit?.field === "body" &&
+        bodyHit.hit.label === "正文匹配" &&
+        (bodyHit.hit.locator ?? "").startsWith("scroll:") &&
+        bodyHit.hit.snippet.includes("起重"),
+      JSON.stringify(bodyResult.items.map((item) => ({ id: item.id, hit: item.hit }))),
+    );
+    const titleHit = hitOf("巡检", scanId);
+    check(
+      "全文搜索：标题更新后立即生效",
+      titleHit?.field === "title" && titleHit.label === "标题匹配",
+      JSON.stringify(titleHit),
+    );
+    const fileHit = hitOf("QD-32", scanId);
+    check(
+      "全文搜索：标题改名后仍可按原文件名检索",
+      fileHit?.field === "file" && fileHit.label === "文件名匹配" && fileHit.snippet.includes("QD-32-5t.txt"),
+      JSON.stringify(fileHit),
+    );
+    setResourceTags(scanId, ["涡轮泵"]);
+    const tagHit = hitOf("涡轮", scanId);
+    check(
+      "全文搜索：标签改动同步到索引",
+      tagHit?.field === "tag" && tagHit.label === "标签：涡轮泵",
+      JSON.stringify(tagHit),
+    );
+    updateResource(scanId, { note: "由张工复核并签字" });
+    const noteHit = hitOf("张工", scanId);
+    check("全文搜索：笔记改动同步到索引", noteHit?.field === "note" && noteHit.label === "笔记匹配", JSON.stringify(noteHit));
+    check(
+      "全文搜索：多段关键词取交集",
+      search("QD-32 起重").items.some((item) => item.id === scanId) && search("QD-32 不存在词").total === 0,
+    );
+    const numberHit = hitOf("98.6", scanId);
+    check(
+      "全文搜索：数字与小数点命中正文",
+      numberHit?.field === "body" && numberHit.keyword === "98.6",
+      JSON.stringify(numberHit),
+    );
+    const pdfHit = hitOf("torque", manualId);
+    check(
+      "全文搜索：PDF 正文命中给出页码与页内定位",
+      pdfHit?.field === "body" && pdfHit.page === 3 && pdfHit.label === "正文 第 3 页" && pdfHit.locator === "page:3",
+      JSON.stringify(pdfHit),
+    );
+    const offsetRow = db
+      .prepare("SELECT extract_page_offsets FROM resources WHERE id = ?")
+      .get(manualId) as { extract_page_offsets: string | null };
+    check(
+      "页码映射：抽取时写入每页起始偏移",
+      JSON.parse(offsetRow.extract_page_offsets ?? "[]").length === 3,
+      offsetRow.extract_page_offsets ?? "null",
+    );
+
+    moveToTrash([scanId]);
+    const trashedAway = search("起重").total === 0;
+    const trashedShown = search("起重", { view: "trash" }).items.some((item) => item.id === scanId);
+    restoreFromTrash([scanId]);
+    check(
+      "回收站与恢复：搜索结果随状态同步",
+      trashedAway && trashedShown && search("起重").items.some((item) => item.id === scanId),
+      JSON.stringify({ trashedAway, trashedShown }),
+    );
+
+    const beforeRebuild = search("起重").total;
+    const rebuilt = rebuildSearchIndex();
+    const status = indexStatus();
+    check(
+      "重建索引：全量重建后结果不变",
+      rebuilt > 0 &&
+        status.ready &&
+        status.version === SEARCH_INDEX_VERSION &&
+        status.indexed === status.total &&
+        search("起重").total === beforeRebuild,
+      JSON.stringify(status),
+    );
+    check("重建索引：版本一致时不重复重建", ensureSearchIndex().rebuilt === false);
+
+    await importOne("page-a.pdf", buildPdf("pagination alpha"));
+    await importOne("page-b.pdf", buildPdf("pagination beta"));
+    await runExtractionQueue();
+    const pageFirst = search("pagination", { limit: 1 });
+    const pageSecond = search("pagination", { limit: 1, offset: 1 });
+    check(
+      "分页：总数稳定且逐页不重复",
+      pageFirst.total === 2 &&
+        pageSecond.total === 2 &&
+        pageFirst.items.length === 1 &&
+        pageSecond.items.length === 1 &&
+        pageFirst.items[0].id !== pageSecond.items[0].id,
+      JSON.stringify({ total: pageFirst.total, first: pageFirst.items[0]?.id, second: pageSecond.items[0]?.id }),
+    );
+
+    // 10. 旧库升级：v4 缺少全文索引，重新打开后补齐结构、字段并回填索引。
+    const resourceCount = one("SELECT COUNT(*) AS n FROM resources");
+    db.exec("DROP TABLE search_fts");
+    db.prepare("UPDATE meta SET value = '4' WHERE key = 'schema_version'").run();
+    closeLibrary();
+    const reopened = openLibrary();
+    const upgraded = reopened.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string };
+    const fileColumns = reopened.prepare("PRAGMA table_info(files)").all() as { name: string }[];
+    const ftsTable = reopened.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'search_fts'").get();
+    const foreignKeys = reopened.prepare("PRAGMA foreign_key_check").all();
+    const integrity = reopened.prepare("PRAGMA integrity_check").get() as { integrity_check: string };
+    const upgradedCount = (
+      reopened.prepare("SELECT COUNT(*) AS n FROM resources").get() as { n: number }
+    ).n;
+    const ensured = ensureSearchIndex();
+    check(
+      "v4→v5：升级补齐索引表与文件名字段，资料与外键完整",
+      upgraded.value === "5" &&
+        fileColumns.some((column) => column.name === "name") &&
+        Boolean(ftsTable) &&
+        upgradedCount === resourceCount &&
+        foreignKeys.length === 0 &&
+        integrity.integrity_check === "ok",
+      JSON.stringify({
+        version: upgraded.value,
+        resources: upgradedCount,
+        foreignKeys: foreignKeys.length,
+        integrity: integrity.integrity_check,
+      }),
+    );
+    check(
+      "v4→v5：升级后回填索引并可继续搜索",
+      ensured.rebuilt === true && indexStatus().ready && search("起重").total === 1,
+      JSON.stringify(ensured),
     );
   } finally {
     const failed = checks.filter((item) => !item.ok);

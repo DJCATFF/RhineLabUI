@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS resources (
   extract_truncated TEXT,
   extract_pages INTEGER,
   extract_page_total INTEGER,
+  extract_page_offsets TEXT,
   source_id TEXT REFERENCES sources(id) ON DELETE SET NULL,
   inbox INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
@@ -51,6 +52,7 @@ CREATE TABLE IF NOT EXISTS files (
   resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
   storage_kind TEXT NOT NULL,
   path TEXT NOT NULL,
+  name TEXT,
   mime_type TEXT NOT NULL,
   ext TEXT NOT NULL,
   size INTEGER NOT NULL,
@@ -111,6 +113,13 @@ CREATE INDEX IF NOT EXISTS resources_kind_idx ON resources (kind);
 CREATE INDEX IF NOT EXISTS files_resource_idx ON files (resource_id);
 CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs (status, created_at);
 CREATE INDEX IF NOT EXISTS jobs_resource_idx ON jobs (resource_id);
+
+-- 全文搜索索引：rowid 复用 resources.archive_no；contentless 不存正文副本。
+-- CJK 在写入与查询前逐字拆分，配合 unicode61 才能支持两字短词。
+CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
+  title, names, tags, note, body,
+  content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2'
+);
 `;
 
 export function libraryPath(): string {
@@ -134,6 +143,7 @@ CREATE TABLE files_next (
   resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
   storage_kind TEXT NOT NULL,
   path TEXT NOT NULL,
+  name TEXT,
   mime_type TEXT NOT NULL,
   ext TEXT NOT NULL,
   size INTEGER NOT NULL,
@@ -141,8 +151,8 @@ CREATE TABLE files_next (
   created_at TEXT NOT NULL,
   UNIQUE (resource_id, sha256, size)
 );
-INSERT INTO files_next (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
-  SELECT id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at FROM files;
+INSERT INTO files_next (id, resource_id, storage_kind, path, name, mime_type, ext, size, sha256, created_at)
+  SELECT id, resource_id, storage_kind, path, name, mime_type, ext, size, sha256, created_at FROM files;
 DROP TABLE files;
 ALTER TABLE files_next RENAME TO files;
 CREATE INDEX IF NOT EXISTS files_resource_idx ON files (resource_id);
@@ -176,14 +186,22 @@ export function openLibrary(): DatabaseSync {
   if (!has("extract_page_total")) {
     db.exec("ALTER TABLE resources ADD COLUMN extract_page_total INTEGER;");
   }
+  if (!has("extract_page_offsets")) {
+    db.exec("ALTER TABLE resources ADD COLUMN extract_page_offsets TEXT;");
+  }
+  // 原件名单独存一列：托管副本按内容哈希命名，索引里要记录用户看到的文件名。
+  const fileColumns = db.prepare("PRAGMA table_info(files)").all() as { name: string }[];
+  if (!fileColumns.some((column) => column.name === "name")) {
+    db.exec("ALTER TABLE files ADD COLUMN name TEXT;");
+  }
   allowSharedOriginals(db);
   const version = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
     | { value: string }
     | undefined;
   if (!version) {
-    db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '4')").run();
-  } else if (Number(version.value) < 4) {
-    db.prepare("UPDATE meta SET value = '4' WHERE key = 'schema_version'").run();
+    db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '5')").run();
+  } else if (Number(version.value) < 5) {
+    db.prepare("UPDATE meta SET value = '5' WHERE key = 'schema_version'").run();
   }
   return db;
 }

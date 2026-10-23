@@ -8,6 +8,8 @@ import { IconChevron, IconClose, IconFolderOpen } from "./Icons";
 
 interface ReaderProps {
   detail: ResourceDetail;
+  /** 搜索命中给出的初始位置（page:N / scroll:0.xxxx），优先于上次阅读位置。 */
+  startLocator?: string | null;
   onClose: () => void;
   onReading: (locator: string, progress: number) => void;
   onOpenOriginal: () => void;
@@ -27,7 +29,7 @@ function parseScroll(locator: string | undefined): number {
   return match ? Math.min(1, Math.max(0, Number(match[1]))) : 0;
 }
 
-export function Reader({ detail, onClose, onReading, onOpenOriginal }: ReaderProps) {
+export function Reader({ detail, startLocator, onClose, onReading, onOpenOriginal }: ReaderProps) {
   const [rail, setRail] = useState<RailKind>(null);
   const path = detail.files[0]?.path ?? "";
   const savedText = detail.extracted?.trim() ? detail.extracted : null;
@@ -85,9 +87,11 @@ export function Reader({ detail, onClose, onReading, onOpenOriginal }: ReaderPro
       <div className="reader-body">
         <main className="reader-main">
           {detail.kind === "pdf" && path && (
-            <PdfReader detail={detail} path={path} onReading={onReading} rail={rail} />
+            <PdfReader detail={detail} path={path} onReading={onReading} rail={rail} startLocator={startLocator} />
           )}
-          {detail.kind === "text" && path && <TextReader detail={detail} path={path} onReading={onReading} />}
+          {detail.kind === "text" && path && (
+            <TextReader detail={detail} path={path} onReading={onReading} startLocator={startLocator} />
+          )}
           {detail.kind === "image" && path && <ImageReader path={path} />}
           {!path && canShowSaved && savedText && <SavedText text={savedText} notice="找不到原件，以下是资料库保存的正文。" />}
           {!path && !canShowSaved && <div className="reader-fallback">找不到原件路径。</div>}
@@ -162,14 +166,16 @@ function PdfReader({
   path,
   onReading,
   rail,
+  startLocator,
 }: {
   detail: ResourceDetail;
   path: string;
   onReading: (locator: string, progress: number) => void;
   rail: RailKind;
+  startLocator?: string | null;
 }) {
   const [doc, setDoc] = useState<PdfDocument | null>(null);
-  const [page, setPage] = useState(() => parsePage(detail.reading?.locator));
+  const [page, setPage] = useState(() => parsePage(startLocator ?? detail.reading?.locator ?? undefined));
   const [pages, setPages] = useState(0);
   const [fit, setFit] = useState(true);
   const [zoom, setZoom] = useState(1.3);
@@ -431,15 +437,18 @@ function TextReader({
   detail,
   path,
   onReading,
+  startLocator,
 }: {
   detail: ResourceDetail;
   path: string;
   onReading: (locator: string, progress: number) => void;
+  startLocator?: string | null;
 }) {
   const [text, setText] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState(parseScroll(detail.reading?.locator));
+  const startScroll = parseScroll(startLocator ?? detail.reading?.locator ?? undefined);
+  const [progress, setProgress] = useState(startScroll);
   const scrollRef = useRef<HTMLDivElement>(null);
   const restored = useRef(false);
 
@@ -477,9 +486,8 @@ function TextReader({
     const element = scrollRef.current;
     if (!element) return;
     restored.current = true;
-    const start = parseScroll(detail.reading?.locator);
-    element.scrollTop = start * Math.max(0, element.scrollHeight - element.clientHeight);
-  }, [text, detail.reading?.locator]);
+    element.scrollTop = startScroll * Math.max(0, element.scrollHeight - element.clientHeight);
+  }, [text, startScroll]);
 
   useEffect(() => {
     const timer = setTimeout(() => onReading(`scroll:${progress.toFixed(4)}`, progress), 500);

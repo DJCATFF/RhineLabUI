@@ -17,6 +17,25 @@ export interface ListParams {
   offset?: number;
 }
 
+/** 搜索命中：字段、片段与可直接用于阅读定位的位置。 */
+export interface SearchHit {
+  field: "title" | "tag" | "file" | "note" | "body";
+  label: string;
+  snippet: string;
+  keyword: string;
+  page: number | null;
+  locator: string | null;
+  offset: number;
+}
+
+export interface IndexStatus {
+  indexed: number;
+  total: number;
+  withText: number;
+  version: string | null;
+  ready: boolean;
+}
+
 export interface ResourceItem {
   id: string;
   archiveNo: number;
@@ -35,6 +54,8 @@ export interface ResourceItem {
   collectionCount: number;
   readingAt: string | null;
   readingProgress: number | null;
+  /** 仅搜索响应带命中信息；普通列表为 null。 */
+  hit: SearchHit | null;
 }
 
 export interface ResourceFile {

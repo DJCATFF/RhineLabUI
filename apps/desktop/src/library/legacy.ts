@@ -142,10 +142,11 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
       }
       db.prepare(
         `UPDATE files
-            SET storage_kind = 'managed', path = ?, mime_type = ?, ext = ?, size = ?, sha256 = ?
+            SET storage_kind = 'managed', path = ?, name = ?, mime_type = ?, ext = ?, size = ?, sha256 = ?
           WHERE id = ?`,
       ).run(
         saved.path,
+        doc.fileName || path.basename(saved.path),
         doc.mimeType || "application/octet-stream",
         path.extname(doc.fileName || saved.path).toLowerCase(),
         saved.size,
@@ -155,12 +156,13 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
       return "attached";
     }
     db.prepare(
-      `INSERT INTO files (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
-       VALUES (?, ?, 'managed', ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO files (id, resource_id, storage_kind, path, name, mime_type, ext, size, sha256, created_at)
+       VALUES (?, ?, 'managed', ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       randomUUID(),
       id,
       saved.path,
+      doc.fileName || path.basename(saved.path),
       doc.mimeType || "application/octet-stream",
       path.extname(doc.fileName || saved.path).toLowerCase(),
       saved.size,
@@ -245,12 +247,13 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
       if (saved) {
         // 同一份内容可能被多个旧库条目共享：物理副本只有一份，关联按条目各写一行。
         db.prepare(
-          `INSERT INTO files (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
-           VALUES (?, ?, 'managed', ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO files (id, resource_id, storage_kind, path, name, mime_type, ext, size, sha256, created_at)
+           VALUES (?, ?, 'managed', ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           randomUUID(),
           id,
           saved.path,
+          doc.fileName || path.basename(saved.path),
           doc.mimeType || "application/octet-stream",
           path.extname(doc.fileName || saved.path).toLowerCase(),
           saved.size,
@@ -259,12 +262,13 @@ export async function importLegacyExport(file: string): Promise<LegacyImportResu
         );
       } else if (fileName) {
         db.prepare(
-          `INSERT INTO files (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
-           VALUES (?, ?, 'legacy', ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO files (id, resource_id, storage_kind, path, name, mime_type, ext, size, sha256, created_at)
+           VALUES (?, ?, 'legacy', ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           randomUUID(),
           id,
           doc.objectKey || fileName,
+          doc.fileName || fileName,
           doc.mimeType || "application/octet-stream",
           ext,
           Number(doc.size) || 0,

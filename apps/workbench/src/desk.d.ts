@@ -2,6 +2,7 @@ import type {
   Facets,
   ImportProgress,
   ImportResult,
+  IndexStatus,
   JobsSummary,
   ListParams,
   ListResult,
@@ -42,6 +43,8 @@ export interface DeskLibrary {
   importFolder: () => Promise<ImportResult>;
   onImportProgress: (callback: (progress: ImportProgress) => void) => () => void;
   jobs: () => Promise<JobsSummary>;
+  rebuildIndex: () => Promise<{ indexed: number; status: IndexStatus }>;
+  indexStatus: () => Promise<IndexStatus>;
   retryExtraction: (id: string) => Promise<{ queued: number; jobs: JobsSummary }>;
   retryFailedExtractions: () => Promise<{ queued: number; jobs: JobsSummary }>;
   onJobsChanged: (callback: (summary: JobsSummary) => void) => () => void;

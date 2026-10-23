@@ -2,6 +2,7 @@ import { openLibrary, nextArchiveNo, nowIso } from "./db";
 import { discardOriginals, originalIntact, originalsDir, saveOriginal, type StoredOriginal } from "./originals";
 import { EXTRACT_JOB, queueExtraction } from "./jobs";
 import { isExtractable } from "./extract";
+import { planQuery, reindexResource, type SearchHit, type SearchPlan } from "./search";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 
@@ -30,6 +31,7 @@ export interface ResourceRow {
   updated_at: string;
   deleted_at: string | null;
   file_path: string | null;
+  file_name: string | null;
   file_ext: string | null;
   file_size: number | null;
   tag_names: string | null;
@@ -56,12 +58,14 @@ export interface ResourceItem {
   collectionCount: number;
   readingAt: string | null;
   readingProgress: number | null;
+  hit: SearchHit | null;
 }
 
 const SELECT_COLUMNS = `
   r.id, r.archive_no, r.title, r.kind, r.status, r.favorite, r.inbox,
   r.created_at, r.updated_at, r.deleted_at,
   (SELECT f.path FROM files f WHERE f.resource_id = r.id ORDER BY f.created_at LIMIT 1) AS file_path,
+  (SELECT f.name FROM files f WHERE f.resource_id = r.id ORDER BY f.created_at LIMIT 1) AS file_name,
   (SELECT f.ext FROM files f WHERE f.resource_id = r.id ORDER BY f.created_at LIMIT 1) AS file_ext,
   (SELECT f.size FROM files f WHERE f.resource_id = r.id ORDER BY f.created_at LIMIT 1) AS file_size,
   (SELECT group_concat(name, '|') FROM (
@@ -92,6 +96,7 @@ function toItem(row: ResourceRow): ResourceItem {
     collectionCount: row.collection_count,
     readingAt: row.reading_at,
     readingProgress: row.reading_progress,
+    hit: null,
   };
 }
 
@@ -127,18 +132,6 @@ function buildWhere(params: ListParams): { sql: string; values: (string | number
     values.push(...params.kinds);
   }
 
-  const search = params.search?.trim();
-  if (search) {
-    const like = `%${search}%`;
-    clauses.push(`(
-      r.title LIKE ? OR IFNULL(r.note, '') LIKE ? OR
-      EXISTS (SELECT 1 FROM files f WHERE f.resource_id = r.id AND f.path LIKE ?) OR
-      EXISTS (SELECT 1 FROM resource_tags rt2 JOIN tags t2 ON t2.id = rt2.tag_id
-              WHERE rt2.resource_id = r.id AND t2.name LIKE ?)
-    )`);
-    values.push(like, like, like, like);
-  }
-
   return { sql: clauses.join(" AND "), values };
 }
 
@@ -155,23 +148,204 @@ function orderBy(sort: SortKind | undefined): string {
   }
 }
 
+function basename(target: string): string {
+  const index = Math.max(target.lastIndexOf("/"), target.lastIndexOf("\\"));
+  return index >= 0 ? target.slice(index + 1) : target;
+}
+
+function locate(text: string, needles: string[]): { pos: number; needle: string } | null {
+  const lower = text.toLowerCase();
+  let best: { pos: number; needle: string } | null = null;
+  for (const needle of needles) {
+    const pos = lower.indexOf(needle.toLowerCase());
+    if (pos >= 0 && (best === null || pos < best.pos)) best = { pos, needle };
+  }
+  return best;
+}
+
+function excerpt(text: string, pos: number, keyword: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.length <= 220) return flat;
+  const start = Math.max(0, Math.min(pos, flat.length - 1) - 32);
+  const end = Math.min(flat.length, start + 200);
+  return `${start > 0 ? "…" : ""}${flat.slice(start, end)}${end < flat.length ? "…" : ""}`;
+}
+
+function parseOffsets(raw: string | null): number[] {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw);
+    return Array.isArray(value) ? value.filter((item): item is number => typeof item === "number") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 页码从 0 基字符偏移二分得到；没有偏移表时返回 null。 */
+function pageAt(offsets: number[], position: number): number | null {
+  if (offsets.length === 0) return null;
+  let low = 0;
+  let high = offsets.length - 1;
+  let found = 0;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (offsets[mid] <= position) {
+      found = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return found + 1;
+}
+
+function bodyHit(
+  db: ReturnType<typeof openLibrary>,
+  id: string,
+  kind: string,
+  plan: SearchPlan,
+): SearchHit | null {
+  const statement = db.prepare(
+    `SELECT len, pos, offsets, snippet FROM (
+       SELECT IFNULL(extracted, '') AS body, IFNULL(extract_page_offsets, '') AS offsets,
+              length(IFNULL(extracted, '')) AS len,
+              instr(lower(IFNULL(extracted, '')), lower(?)) AS pos,
+              substr(IFNULL(extracted, ''), MAX(1, instr(lower(IFNULL(extracted, '')), lower(?)) - 40), 200) AS snippet
+         FROM resources WHERE id = ?
+     )`,
+  );
+  // 最多检查 4 个关键词，避免对超长正文反复全量扫描。
+  for (const needle of plan.needles.slice(0, 4)) {
+    const row = statement.get(needle, needle, id) as
+      | { len: number; pos: number; offsets: string; snippet: string }
+      | undefined;
+    if (!row || row.pos <= 0) continue;
+    const page = pageAt(parseOffsets(row.offsets), row.pos - 1);
+    const locator =
+      kind === "pdf" && page !== null
+        ? `page:${page}`
+        : row.len > 0
+          ? `scroll:${(row.pos / row.len).toFixed(4)}`
+          : null;
+    return {
+      field: "body",
+      label: kind === "pdf" && page !== null ? `正文 第 ${page} 页` : "正文匹配",
+      snippet: excerpt(row.snippet, 0, needle),
+      keyword: needle,
+      page,
+      locator,
+      offset: row.pos,
+    };
+  }
+  return null;
+}
+
+function buildHit(db: ReturnType<typeof openLibrary>, row: ResourceRow, plan: SearchPlan): SearchHit | null {
+  const title = locate(row.title, plan.needles);
+  if (title) {
+    return {
+      field: "title",
+      label: "标题匹配",
+      snippet: excerpt(row.title, title.pos, title.needle),
+      keyword: title.needle,
+      page: null,
+      locator: null,
+      offset: title.pos + 1,
+    };
+  }
+
+  const tags = row.tag_names ? row.tag_names.split("|") : [];
+  for (const tag of tags) {
+    const match = locate(tag, plan.needles);
+    if (match) {
+      return {
+        field: "tag",
+        label: `标签：${tag}`,
+        snippet: tag,
+        keyword: match.needle,
+        page: null,
+        locator: null,
+        offset: match.pos + 1,
+      };
+    }
+  }
+
+  const fileName = row.file_name ?? (row.file_path ? basename(row.file_path) : null);
+  if (fileName) {
+    const match = locate(fileName, plan.needles);
+    if (match) {
+      return {
+        field: "file",
+        label: "文件名匹配",
+        snippet: fileName,
+        keyword: match.needle,
+        page: null,
+        locator: null,
+        offset: match.pos + 1,
+      };
+    }
+  }
+
+  const note = db.prepare("SELECT note FROM resources WHERE id = ?").get(row.id) as { note: string | null } | undefined;
+  if (note?.note) {
+    const match = locate(note.note, plan.needles);
+    if (match) {
+      return {
+        field: "note",
+        label: "笔记匹配",
+        snippet: excerpt(note.note, match.pos, match.needle),
+        keyword: match.needle,
+        page: null,
+        locator: null,
+        offset: match.pos + 1,
+      };
+    }
+  }
+
+  return bodyHit(db, row.id, row.kind, plan);
+}
+
 export function listResources(params: ListParams): { items: ResourceItem[]; total: number } {
   const db = openLibrary();
   const where = buildWhere(params);
   const limit = Math.min(Math.max(params.limit ?? 120, 1), 500);
   const offset = Math.max(params.offset ?? 0, 0);
+  const search = params.search?.trim();
+  const plan = search ? planQuery(search) : null;
+  if (search && !plan) return { items: [], total: 0 };
 
+  if (!plan) {
+    const rows = db
+      .prepare(
+        `SELECT ${SELECT_COLUMNS} FROM resources r WHERE ${where.sql} ORDER BY ${orderBy(params.sort)} LIMIT ? OFFSET ?`,
+      )
+      .all(...where.values, limit, offset) as unknown as ResourceRow[];
+
+    const total = db
+      .prepare(`SELECT count(*) AS total FROM resources r WHERE ${where.sql}`)
+      .get(...where.values) as { total: number };
+
+    return { items: rows.map(toItem), total: total.total };
+  }
+
+  const clauses = [where.sql, "search_fts MATCH ?"].filter(Boolean);
+  const values = [...where.values, plan.match];
+  const from = "resources r JOIN search_fts ON search_fts.rowid = r.archive_no";
   const rows = db
     .prepare(
-      `SELECT ${SELECT_COLUMNS} FROM resources r WHERE ${where.sql} ORDER BY ${orderBy(params.sort)} LIMIT ? OFFSET ?`,
+      `SELECT ${SELECT_COLUMNS} FROM ${from} WHERE ${clauses.join(" AND ")}
+       ORDER BY bm25(search_fts, 8, 6, 5, 3, 1) ASC, ${orderBy(params.sort)} LIMIT ? OFFSET ?`,
     )
-    .all(...where.values, limit, offset) as unknown as ResourceRow[];
+    .all(...values, limit, offset) as unknown as ResourceRow[];
 
   const total = db
-    .prepare(`SELECT count(*) AS total FROM resources r WHERE ${where.sql}`)
-    .get(...where.values) as { total: number };
+    .prepare(`SELECT count(*) AS total FROM ${from} WHERE ${clauses.join(" AND ")}`)
+    .get(...values) as { total: number };
 
-  return { items: rows.map(toItem), total: total.total };
+  return {
+    items: rows.map((row) => ({ ...toItem(row), hit: buildHit(db, row, plan) })),
+    total: total.total,
+  };
 }
 
 export function getResource(id: string) {
@@ -320,6 +494,7 @@ export function updateResource(id: string, patch: { title?: string; favorite?: b
   sets.push("updated_at = ?");
   values.push(nowIso());
   db.prepare(`UPDATE resources SET ${sets.join(", ")} WHERE id = ?`).run(...values, id);
+  if (patch.title !== undefined || patch.note !== undefined) reindexResource(id, db);
   return getResource(id);
 }
 
@@ -336,6 +511,7 @@ export function setResourceTags(id: string, names: string[]) {
       db.prepare("INSERT INTO resource_tags (resource_id, tag_id, origin) VALUES (?, ?, 'user')").run(id, tagId);
     }
     db.prepare("UPDATE resources SET updated_at = ? WHERE id = ?").run(nowIso(), id);
+    reindexResource(id, db);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -545,9 +721,20 @@ export async function registerImport(options: {
           stamp,
         );
         db.prepare(
-          `INSERT INTO files (id, resource_id, storage_kind, path, mime_type, ext, size, sha256, created_at)
-           VALUES (?, ?, 'managed', ?, ?, ?, ?, ?, ?)`,
-        ).run(randomUUID(), resourceId, stored.path, file.mimeType, file.ext, stored.size, stored.sha256, stamp);
+          `INSERT INTO files (id, resource_id, storage_kind, path, name, mime_type, ext, size, sha256, created_at)
+           VALUES (?, ?, 'managed', ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          randomUUID(),
+          resourceId,
+          stored.path,
+          file.title + file.ext,
+          file.mimeType,
+          file.ext,
+          stored.size,
+          stored.sha256,
+          stamp,
+        );
+        reindexResource(resourceId, db);
         ids.push(resourceId);
       }
 

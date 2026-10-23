@@ -38,6 +38,8 @@ export interface ExtractResult {
   truncated: "chars" | "pages" | null;
   pages: number;
   pageTotal: number;
+  /** 每页正文在 text 中的起始字符偏移（按码点计，与 SQLite length/instr 一致）。 */
+  pageOffsets: number[];
   bytes: number;
   sha256: string;
 }
@@ -132,6 +134,13 @@ async function preparePdfjs(): Promise<PdfModule> {
   return (await importer(pathToFileURL(pdfEntry()).href)) as PdfModule;
 }
 
+/** SQLite 的 length/instr 按 Unicode 码点计数，JS 的 length 按 UTF-16 单元；偏移统一用码点。 */
+function codePointLength(text: string): number {
+  let count = 0;
+  for (const _char of text) count += 1;
+  return count;
+}
+
 function readPlainText(buffer: Buffer, limits: ExtractLimits): ExtractResult {
   const raw = buffer.toString("utf8").replace(/^\uFEFF/, "").trim();
   if (!raw) throw new Error("文件里没有可抽取的文本");
@@ -141,6 +150,7 @@ function readPlainText(buffer: Buffer, limits: ExtractLimits): ExtractResult {
     truncated: truncated ? "chars" : null,
     pages: 1,
     pageTotal: 1,
+    pageOffsets: [0],
     bytes: buffer.byteLength,
     sha256: createHash("sha256").update(buffer).digest("hex"),
   };
@@ -195,14 +205,27 @@ async function readPdfText(
   } finally {
     await doc.destroy();
   }
-  const joined = parts.join("\n").trim();
+  const raw = parts.join("\n");
+  const joined = raw.trim();
   if (!joined) throw new Error("PDF 里没有可抽取的文本，可能是扫描件");
   const clipped = truncated === "chars" ? joined.slice(0, limits.maxChars) : joined;
+  // 页码映射：先按 parts 累加码点（含连接换行），再扣除 trim 掉的头部空白，
+  // 得到每页在最终正文里的起始偏移；超出截断长度的尾页不再记录。
+  const leading = codePointLength(raw) - codePointLength(raw.trimStart());
+  const clippedLength = codePointLength(clipped);
+  const pageOffsets: number[] = [];
+  let cursor = 0;
+  for (const part of parts) {
+    const start = cursor - leading;
+    if (start >= 0 && start < clippedLength) pageOffsets.push(start);
+    cursor += codePointLength(part) + 1;
+  }
   return {
     text: clipped,
     truncated,
     pages: processed,
     pageTotal,
+    pageOffsets,
     bytes: buffer.byteLength,
     sha256: createHash("sha256").update(buffer).digest("hex"),
   };
