@@ -1397,6 +1397,10 @@ img {
   color: var(--danger);
 }
 
+.block-placeholder.is-truncated {
+  color: var(--warning);
+}
+
 .chip-list {
   display: flex;
   align-items: center;

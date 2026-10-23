@@ -6,6 +6,8 @@ import { openLibrary } from "./db";
 import { importFolder } from "./importer";
 import {
   EXTRACT_JOB,
+  completeJob,
+  failJob,
   jobsSummary,
   queueExtraction,
   recoverInterruptedJobs,
@@ -14,6 +16,7 @@ import {
 } from "./jobs";
 import { importLegacyExport } from "./legacy";
 import { originalIntact, originalsDir } from "./originals";
+import { extractWorkerPid } from "../extract-runner";
 
 interface CheckResult {
   name: string;
@@ -21,16 +24,23 @@ interface CheckResult {
   detail?: string;
 }
 
-/** 生成一份最小但结构合法的文本型 PDF，用于回归正文抽取。 */
-function buildPdf(text: string): Buffer {
-  const objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-  ];
-  const stream = `BT /F1 16 Tf 20 100 Td (${text}) Tj ET`;
-  objects.push(`<< /Length ${Buffer.byteLength(stream, "ascii")} >>\nstream\n${stream}\nendstream`);
+/** 生成结构合法的多页文本型 PDF，用于回归正文抽取与限额、响应性验证。 */
+function buildPdf(text: string, pageCount = 1): Buffer {
+  const objects: string[] = ["<< /Type /Catalog /Pages 2 0 R >>"];
+  const fontId = 3 + pageCount * 2;
+  const pageIds = Array.from({ length: pageCount }, (_, index) => 3 + index * 2);
+  objects.push(
+    `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageCount} >>`,
+  );
+  for (let index = 0; index < pageCount; index += 1) {
+    const contentId = pageIds[index] + 1;
+    objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentId} 0 R >>`,
+    );
+    const stream = `BT /F1 16 Tf 20 100 Td (${text} page ${index + 1}) Tj ET`;
+    objects.push(`<< /Length ${Buffer.byteLength(stream, "ascii")} >>\nstream\n${stream}\nendstream`);
+  }
+  objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
 
   let body = "%PDF-1.4\n";
   const offsets: number[] = [];
@@ -425,10 +435,6 @@ export async function runLibraryRegression(): Promise<void> {
     );
     check("抽取入队：已完成的资料不再重复建任务", queueExtraction([note.id]) === 0);
 
-    const brokenFile = db
-      .prepare("SELECT path FROM files WHERE resource_id = ? AND storage_kind = 'managed' LIMIT 1")
-      .get(broken.id) as { path: string };
-    await writeFile(brokenFile.path, buildPdf("Recovered PDF extraction after retry"));
     check("失败重试：重新入队 1 条", retryExtraction(broken.id) === 1);
     check(
       "失败重试：任务复位为待处理并清空错误",
@@ -439,12 +445,14 @@ export async function runLibraryRegression(): Promise<void> {
     );
     await runExtractionQueue();
     check(
-      "失败重试：重新抽取成功",
-      stateOf(broken.id).status === "ready" &&
-        textOf(broken.id).includes("Recovered PDF extraction after retry") &&
-        jobOf(broken.id)?.status === "done",
-      JSON.stringify({ status: stateOf(broken.id).status, text: textOf(broken.id) }),
+      "失败重试：损坏原件再次失败并累加尝试次数",
+      stateOf(broken.id).status === "failed" &&
+        jobOf(broken.id)?.status === "failed" &&
+        jobOf(broken.id)?.attempts === 2 &&
+        Boolean(jobOf(broken.id)?.error),
+      JSON.stringify(jobOf(broken.id)),
     );
+    check("失败重试：不重复建任务", jobsOf(broken.id) === 1);
 
     const resumeDir = path.join(root, "extract-resume");
     await mkdir(resumeDir, { recursive: true });
@@ -487,8 +495,219 @@ export async function runLibraryRegression(): Promise<void> {
       "中断恢复：重启后继续完成抽取",
       stateOf(resumeRow.id).status === "ready" &&
         textOf(resumeRow.id) === resumeText &&
-        jobOf(resumeRow.id)?.status === "done",
-      JSON.stringify(stateOf(resumeRow.id)),
+        jobOf(resumeRow.id)?.status === "done" &&
+        jobsOf(resumeRow.id) === 1,
+      JSON.stringify({ ...stateOf(resumeRow.id), jobs: jobsOf(resumeRow.id) }),
+    );
+
+    // 8. 进程隔离：大 PDF 响应性、页数与字数限额、执行超时、工作进程崩溃和迟到结果。
+    const workerRoot = path.join(root, "extract-worker");
+    const extractInfo = (id: string) =>
+      db
+        .prepare(
+          "SELECT status, extracted, extract_truncated, extract_pages, extract_page_total FROM resources WHERE id = ?",
+        )
+        .get(id) as {
+        status: string;
+        extracted: string | null;
+        extract_truncated: string | null;
+        extract_pages: number | null;
+        extract_page_total: number | null;
+      };
+    /** 单项导入：每份资料独占一个来源目录，便于逐条施加不同的抽取限额。 */
+    const importOne = async (name: string, content: Buffer): Promise<string> => {
+      const dir = path.join(workerRoot, path.basename(name, path.extname(name)));
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, name), content);
+      await importFolder(dir, noop);
+      const row = db
+        .prepare("SELECT r.id FROM resources r JOIN sources s ON s.id = r.source_id WHERE s.root_path = ?")
+        .get(dir) as { id: string } | undefined;
+      if (!row) throw new Error(`导入后找不到资料：${name}`);
+      return row.id;
+    };
+
+    // 大 PDF：抽取期间持续采样主线程定时器抖动与数据库查询耗时。
+    const bulkId = await importOne("bulk.pdf", buildPdf("Rhine bulk responsive sample", 300));
+    let sampling = true;
+    let timerMaxLagMs = 0;
+    let queryMaxMs = 0;
+    let samples = 0;
+    const probe = (async () => {
+      while (sampling) {
+        const tick = Date.now();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        timerMaxLagMs = Math.max(timerMaxLagMs, Date.now() - tick - 10);
+        const startedAt = Date.now();
+        one("SELECT COUNT(*) AS n FROM resources WHERE deleted_at IS NULL");
+        queryMaxMs = Math.max(queryMaxMs, Date.now() - startedAt);
+        samples += 1;
+      }
+    })();
+    await runExtractionQueue();
+    sampling = false;
+    await probe;
+    const bulk = extractInfo(bulkId);
+    check(
+      "大 PDF：抽取期间主线程保持响应",
+      samples >= 3 && timerMaxLagMs < 500 && queryMaxMs < 200,
+      JSON.stringify({ samples, timerMaxLagMs, queryMaxMs }),
+    );
+    check(
+      "大 PDF：完整抽取并记录页数",
+      bulk.status === "ready" &&
+        bulk.extract_truncated === null &&
+        bulk.extract_pages === 300 &&
+        bulk.extract_page_total === 300,
+      JSON.stringify(bulk),
+    );
+
+    const cutId = await importOne("cut.pdf", buildPdf("Rhine page limit sample", 40));
+    await runExtractionQueue({ limits: { maxPages: 6 } });
+    const cut = extractInfo(cutId);
+    check(
+      "页数限额：只抽取前 6 页并标注截断",
+      cut.status === "ready" &&
+        cut.extract_truncated === "pages" &&
+        cut.extract_pages === 6 &&
+        cut.extract_page_total === 40 &&
+        (cut.extracted ?? "").includes("page 6") &&
+        !(cut.extracted ?? "").includes("page 7"),
+      JSON.stringify(cut),
+    );
+
+    const charsId = await importOne("chars.pdf", buildPdf("Rhine char limit sample", 40));
+    await runExtractionQueue({ limits: { maxChars: 200 } });
+    const chars = extractInfo(charsId);
+    check(
+      "字数限额：写入部分正文并标注截断",
+      chars.status === "ready" &&
+        chars.extract_truncated === "chars" &&
+        (chars.extract_pages ?? 0) < 40 &&
+        (chars.extracted ?? "").length >= 200,
+      JSON.stringify({ ...chars, length: (chars.extracted ?? "").length }),
+    );
+
+    // 用足够大的文档保证超时先于结果到达，避免与 IPC 回包的先后顺序产生竞态。
+    const slowId = await importOne("slow.pdf", buildPdf("Rhine timeout sample", 300));
+    await runExtractionQueue({ timeoutMs: 20 });
+    check(
+      "执行超时：停止工作进程并记录原因",
+      stateOf(slowId).status === "failed" &&
+        jobOf(slowId)?.status === "failed" &&
+        (jobOf(slowId)?.error ?? "").includes("抽取超时"),
+      JSON.stringify(jobOf(slowId)),
+    );
+    check("执行超时：重试重新入队 1 条", retryExtraction(slowId) === 1);
+    await runExtractionQueue();
+    check(
+      "执行超时：重试后正常完成",
+      stateOf(slowId).status === "ready" &&
+        textOf(slowId).includes("Rhine timeout sample") &&
+        jobOf(slowId)?.status === "done" &&
+        jobsOf(slowId) === 1,
+      JSON.stringify({ ...stateOf(slowId), jobs: jobsOf(slowId) }),
+    );
+
+    const crashId = await importOne("crash.pdf", buildPdf("Rhine crash sample", 300));
+    const crashRun = runExtractionQueue();
+    let workerPid: number | null = null;
+    const waitStarted = Date.now();
+    while (!workerPid && Date.now() - waitStarted < 10_000) {
+      workerPid = extractWorkerPid();
+      if (!workerPid) await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    check(
+      "进程隔离：抽取在独立工作进程中运行",
+      workerPid !== null && workerPid !== process.pid,
+      JSON.stringify({ workerPid }),
+    );
+    if (workerPid) {
+      try {
+        process.kill(workerPid);
+      } catch {
+        // 进程可能刚好已经结束，后续断言会给出结论。
+      }
+    }
+    await crashRun;
+    check(
+      "工作进程崩溃：记录失败原因",
+      stateOf(crashId).status === "failed" &&
+        jobOf(crashId)?.status === "failed" &&
+        (jobOf(crashId)?.error ?? "").includes("抽取进程意外退出"),
+      JSON.stringify(jobOf(crashId)),
+    );
+
+    const crashJobRow = db
+      .prepare("SELECT id, attempts FROM jobs WHERE resource_id = ? AND type = ? ORDER BY created_at DESC LIMIT 1")
+      .get(crashId, EXTRACT_JOB) as { id: string; attempts: number };
+    const staleResult = { text: "迟到结果", truncated: null, pages: 1, pageTotal: 1, bytes: 0, sha256: "" };
+    check(
+      "迟到结果：旧尝试不能写入正文",
+      completeJob(crashJobRow.id, crashId, crashJobRow.attempts - 1, staleResult) === false &&
+        extractInfo(crashId).extracted === null,
+      JSON.stringify(extractInfo(crashId)),
+    );
+    check(
+      "迟到结果：旧尝试不能覆盖失败原因",
+      failJob(crashJobRow.id, crashId, crashJobRow.attempts - 1, "迟到的失败") === false &&
+        (jobOf(crashId)?.error ?? "").includes("抽取进程意外退出"),
+      JSON.stringify(jobOf(crashId)),
+    );
+    check("工作进程崩溃：重试重新入队 1 条", retryExtraction(crashId) === 1);
+    await runExtractionQueue();
+    const crashRetried = extractInfo(crashId);
+    check(
+      "工作进程崩溃：重试后完成且不重复建任务",
+      crashRetried.status === "ready" &&
+        (crashRetried.extracted ?? "").includes("Rhine crash sample") &&
+        jobOf(crashId)?.status === "done" &&
+        jobOf(crashId)?.attempts === 2 &&
+        jobsOf(crashId) === 1,
+      JSON.stringify({ ...crashRetried, jobs: jobsOf(crashId), job: jobOf(crashId) }),
+    );
+    await runExtractionQueue();
+    check(
+      "重复执行队列：不重复写入结果",
+      extractInfo(crashId).extracted === crashRetried.extracted &&
+        jobOf(crashId)?.attempts === 2 &&
+        jobsOf(crashId) === 1,
+    );
+
+    // 原件缺失：先失败，重新导入补齐托管副本后才能重试成功。
+    const repairPdf = buildPdf("Rhine repair sample", 3);
+    const repairId = await importOne("repair.pdf", repairPdf);
+    const repairFile = db
+      .prepare("SELECT path FROM files WHERE resource_id = ? AND storage_kind = 'managed' LIMIT 1")
+      .get(repairId) as { path: string };
+    await rm(repairFile.path, { force: true });
+    await runExtractionQueue();
+    check(
+      "原件缺失：记录原因且不写入空正文",
+      stateOf(repairId).status === "failed" &&
+        (jobOf(repairId)?.error ?? "").includes("原件已不在资料库中") &&
+        extractInfo(repairId).extracted === null,
+      JSON.stringify(jobOf(repairId)),
+    );
+    const repairImport = await importFolder(path.join(workerRoot, "repair"), noop);
+    check(
+      "原件缺失：重新导入恢复托管原件",
+      repairImport.repaired === 1 &&
+        (await originalIntact(repairFile.path, {
+          sha256: createHash("sha256").update(repairPdf).digest("hex"),
+          size: repairPdf.length,
+        })),
+      JSON.stringify(repairImport),
+    );
+    check("原件缺失：重试重新入队 1 条", retryExtraction(repairId) === 1);
+    await runExtractionQueue();
+    check(
+      "原件缺失：补齐原件后重试成功",
+      stateOf(repairId).status === "ready" &&
+        textOf(repairId).includes("Rhine repair sample") &&
+        jobOf(repairId)?.status === "done" &&
+        jobsOf(repairId) === 1,
+      JSON.stringify({ ...stateOf(repairId), jobs: jobsOf(repairId) }),
     );
   } finally {
     const failed = checks.filter((item) => !item.ok);

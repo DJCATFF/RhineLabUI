@@ -220,10 +220,15 @@ export function getResource(id: string) {
     )
     .get(id) as unknown as { id: string; kind: string; label: string; root_path: string | null } | undefined;
 
-  const text = db.prepare("SELECT note, summary, extracted FROM resources WHERE id = ?").get(id) as {
+  const text = db
+    .prepare("SELECT note, summary, extracted, extract_truncated, extract_pages, extract_page_total FROM resources WHERE id = ?")
+    .get(id) as {
     note: string | null;
     summary: string | null;
     extracted: string | null;
+    extract_truncated: string | null;
+    extract_pages: number | null;
+    extract_page_total: number | null;
   };
 
   const job = db
@@ -239,6 +244,9 @@ export function getResource(id: string) {
     note: text.note,
     summary: text.summary,
     extracted: text.extracted,
+    extractTruncated: (text.extract_truncated as "chars" | "pages" | null) ?? null,
+    extractPages: text.extract_pages,
+    extractPageTotal: text.extract_page_total,
     files,
     collections,
     tagDetails: tags,

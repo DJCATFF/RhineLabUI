@@ -1,6 +1,6 @@
 {
   "name": "rhine-desk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Rhine Lab 本地资源管理工作台（桌面宿主）",
   "main": "dist/main.js",
@@ -26,7 +26,8 @@
       "src/index.html"
     ],
     "asarUnpack": [
-      "node_modules/pdfjs-dist/**"
+      "node_modules/pdfjs-dist/**",
+      "node_modules/@napi-rs/canvas/**"
     ],
     "extraResources": [
       {
@@ -41,6 +42,7 @@
     }
   },
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.100",
     "pdfjs-dist": "^5.7.284"
   }
 }

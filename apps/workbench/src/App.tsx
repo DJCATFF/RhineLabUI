@@ -499,6 +499,9 @@ export function App() {
   const jobs = jobsQuery.data;
   const jobsActive = jobs ? jobs.pending + jobs.running : 0;
   const jobsPercent = jobs && jobs.total > 0 ? Math.round((jobs.done / jobs.total) * 100) : 0;
+  const jobsLive = jobs?.current
+    ? `正在抽取 ${jobs.current.title}${jobs.current.pageTotal > 1 ? ` · 第 ${jobs.current.pages} / ${jobs.current.pageTotal} 页` : ""}`
+    : null;
   const showJobs = Boolean(jobs && (jobsActive > 0 || jobs.failed > 0));
 
   return (
@@ -677,7 +680,7 @@ export function App() {
           </span>
           <span className="import-detail">
             {jobsActive > 0
-              ? `待处理 ${jobs.pending} · 进行中 ${jobs.running} · 已完成 ${jobs.done}`
+              ? jobsLive ?? `待处理 ${jobs.pending} · 进行中 ${jobs.running} · 已完成 ${jobs.done}`
               : `${jobs.failed} 项没有抽取成功`}
           </span>
           {jobsActive > 0 && (

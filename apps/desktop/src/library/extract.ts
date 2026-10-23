@@ -1,10 +1,51 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 
-/** 正文长度上限：超出后截断，避免单个超大文件拖慢保存与后续索引。 */
-const TEXT_LIMIT = 2_000_000;
+/** 单份原件的抽取上限：超出后拒绝或截断，避免一个超大文件拖住整个队列。 */
+export const EXTRACT_LIMITS = {
+  maxBytes: 100 * 1024 * 1024,
+  maxPages: 2000,
+  maxChars: 2_000_000,
+};
+
+export interface ExtractLimits {
+  maxBytes: number;
+  maxPages: number;
+  maxChars: number;
+}
+
+/** 托管原件：抽取前按登记信息核对存在性、大小与摘要。 */
+export interface ExtractTarget {
+  kind: string;
+  path: string;
+  size: number;
+  sha256: string;
+}
+
+export interface ExtractProgress {
+  pages: number;
+  pageTotal: number;
+  chars: number;
+}
+
+export interface ExtractResult {
+  text: string;
+  /** chars：达到字数上限；pages：达到页数上限；null：完整抽取。 */
+  truncated: "chars" | "pages" | null;
+  pages: number;
+  pageTotal: number;
+  bytes: number;
+  sha256: string;
+}
+
+export interface ExtractOptions {
+  limits?: Partial<ExtractLimits>;
+  onProgress?: (progress: ExtractProgress) => void;
+}
 
 const EXTRACTABLE = new Set(["text", "pdf"]);
 
@@ -13,8 +54,8 @@ export function isExtractable(kind: string): boolean {
   return EXTRACTABLE.has(kind);
 }
 
-function clip(input: string): string {
-  return input.length > TEXT_LIMIT ? input.slice(0, TEXT_LIMIT) : input;
+function megabytes(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
 }
 
 function pdfEntry(): string {
@@ -53,28 +94,68 @@ interface PdfModule {
 
 let pdfModule: Promise<PdfModule> | null = null;
 
+/**
+ * pdfjs 用 `process.type !== "browser"` 判断自己不在 Node 里，Electron 的 utilityProcess
+ * 恰好是 "utility"，于是它会跳过自带的 Node 补偿，而 legacy 构建在导入阶段就需要
+ * DOMMatrix。这里在导入前补齐同样的全局，避免抽取进程直接抛错。
+ */
+function ensurePdfGlobals(): void {
+  if (typeof globalThis.DOMMatrix === "function" && typeof globalThis.Path2D === "function") return;
+  const nodeRequire = createRequire(__filename);
+  const canvas = nodeRequire("@napi-rs/canvas") as {
+    DOMMatrix?: typeof DOMMatrix;
+    Path2D?: typeof Path2D;
+    ImageData?: typeof ImageData;
+  };
+  globalThis.DOMMatrix ??= canvas.DOMMatrix as typeof DOMMatrix;
+  globalThis.Path2D ??= canvas.Path2D as typeof Path2D;
+  globalThis.ImageData ??= canvas.ImageData as typeof ImageData;
+}
+
 /** pdfjs 是 ESM：CommonJS 构建里只能用动态 import 加载绝对 URL。 */
 function loadPdfjs(): Promise<PdfModule> {
-  if (!pdfModule) {
-    const importer = new Function("specifier", "return import(specifier)") as (
-      specifier: string,
-    ) => Promise<PdfModule>;
-    pdfModule = importer(pathToFileURL(pdfEntry()).href);
-  }
+  if (!pdfModule) pdfModule = preparePdfjs();
   return pdfModule;
 }
 
-async function readPlainText(file: string): Promise<string> {
-  const raw = await readFile(file, "utf8");
-  return clip(raw.replace(/^\uFEFF/, "")).trim();
+async function preparePdfjs(): Promise<PdfModule> {
+  ensurePdfGlobals();
+  const importer = new Function("specifier", "return import(specifier)") as (
+    specifier: string,
+  ) => Promise<unknown>;
+  const workerEntry = path.join(path.dirname(pdfEntry()), "pdf.worker.mjs");
+  // 直接在工作进程内加载 worker 模块，pdfjs 会走「同线程假 worker」而不是创建 Web Worker。
+  const worker = (await importer(pathToFileURL(workerEntry).href)) as {
+    WorkerMessageHandler: unknown;
+  };
+  (globalThis as { pdfjsWorker?: unknown }).pdfjsWorker = worker;
+  return (await importer(pathToFileURL(pdfEntry()).href)) as PdfModule;
 }
 
-async function readPdfText(file: string): Promise<string> {
+function readPlainText(buffer: Buffer, limits: ExtractLimits): ExtractResult {
+  const raw = buffer.toString("utf8").replace(/^\uFEFF/, "").trim();
+  if (!raw) throw new Error("文件里没有可抽取的文本");
+  const truncated = raw.length > limits.maxChars;
+  return {
+    text: truncated ? raw.slice(0, limits.maxChars) : raw,
+    truncated: truncated ? "chars" : null,
+    pages: 1,
+    pageTotal: 1,
+    bytes: buffer.byteLength,
+    sha256: createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+async function readPdfText(
+  buffer: Buffer,
+  limits: ExtractLimits,
+  onProgress?: (progress: ExtractProgress) => void,
+): Promise<ExtractResult> {
   const pdfjs = await loadPdfjs();
   const root = path.join(path.dirname(pdfEntry()), "..", "..");
   // pdfjs 要求资源地址以斜杠结尾，Node 侧按路径直接读取，统一改成正斜杠。
   const asset = (name: string) => `${path.join(root, name).replace(/\\/g, "/")}/`;
-  const data = new Uint8Array(await readFile(file));
+  const data = new Uint8Array(buffer);
   const task = pdfjs.getDocument({
     data,
     standardFontDataUrl: asset("standard_fonts"),
@@ -84,9 +165,14 @@ async function readPdfText(file: string): Promise<string> {
     verbosity: 0,
   });
   const doc = await task.promise;
-  const pages: string[] = [];
+  const pageTotal = doc.numPages;
+  const parts: string[] = [];
+  const pageLimit = Math.min(pageTotal, limits.maxPages);
+  let chars = 0;
+  let processed = 0;
+  let truncated: "chars" | "pages" | null = null;
   try {
-    for (let index = 1; index <= doc.numPages; index += 1) {
+    for (let index = 1; index <= pageLimit; index += 1) {
       const page = await doc.getPage(index);
       const content = await page.getTextContent();
       let body = "";
@@ -95,26 +181,50 @@ async function readPdfText(file: string): Promise<string> {
         body += item.str;
         if (item.hasEOL) body += "\n";
       }
-      pages.push(body);
       page.cleanup?.();
+      parts.push(body);
+      processed = index;
+      chars += body.length;
+      onProgress?.({ pages: index, pageTotal, chars });
+      if (chars >= limits.maxChars) {
+        truncated = "chars";
+        break;
+      }
     }
+    if (!truncated && processed < pageTotal) truncated = "pages";
   } finally {
     await doc.destroy();
   }
-  return clip(pages.join("\n")).trim();
+  const joined = parts.join("\n").trim();
+  if (!joined) throw new Error("PDF 里没有可抽取的文本，可能是扫描件");
+  const clipped = truncated === "chars" ? joined.slice(0, limits.maxChars) : joined;
+  return {
+    text: clipped,
+    truncated,
+    pages: processed,
+    pageTotal,
+    bytes: buffer.byteLength,
+    sha256: createHash("sha256").update(buffer).digest("hex"),
+  };
 }
 
-/** 抽取托管原件的正文；失败时抛出可直接展示给用户的原因。 */
-export async function extractText(kind: string, file: string): Promise<string> {
-  if (kind === "text") {
-    const body = await readPlainText(file);
-    if (!body) throw new Error("文件里没有可抽取的文本");
-    return body;
+/**
+ * 校验并抽取托管原件。只在工作进程里调用：这里会读入整份原件，
+ * 主进程不应直接执行。失败时抛出的原因可以直接展示给用户。
+ */
+export async function extractOriginal(target: ExtractTarget, options: ExtractOptions = {}): Promise<ExtractResult> {
+  const limits: ExtractLimits = { ...EXTRACT_LIMITS, ...options.limits };
+  const info = await stat(target.path).catch(() => null);
+  if (!info) throw new Error("原件已不在资料库中，无法抽取正文");
+  if (info.size > limits.maxBytes) {
+    throw new Error(`原件超过 ${megabytes(limits.maxBytes)}，未自动抽取正文`);
   }
-  if (kind === "pdf") {
-    const body = await readPdfText(file);
-    if (!body) throw new Error("PDF 里没有可抽取的文本，可能是扫描件");
-    return body;
+  const buffer = await readFile(target.path);
+  const sha256 = createHash("sha256").update(buffer).digest("hex");
+  if (buffer.byteLength !== target.size || sha256 !== target.sha256) {
+    throw new Error("原件与登记信息不一致，可能已被修改，未写入正文");
   }
-  throw new Error(`暂不支持抽取「${kind}」类型的正文`);
+  if (target.kind === "text") return readPlainText(buffer, limits);
+  if (target.kind === "pdf") return readPdfText(buffer, limits, options.onProgress);
+  throw new Error(`暂不支持抽取「${target.kind}」类型的正文`);
 }

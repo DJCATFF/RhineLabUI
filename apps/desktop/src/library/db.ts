@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS resources (
   extracted TEXT,
   summary TEXT,
   key_points TEXT,
+  extract_truncated TEXT,
+  extract_pages INTEGER,
+  extract_page_total INTEGER,
   source_id TEXT REFERENCES sources(id) ON DELETE SET NULL,
   inbox INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
@@ -160,17 +163,27 @@ export function openLibrary(): DatabaseSync {
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
   const columns = db.prepare("PRAGMA table_info(resources)").all() as { name: string }[];
-  if (!columns.some((column) => column.name === "key_points")) {
+  const has = (name: string) => columns.some((column) => column.name === name);
+  if (!has("key_points")) {
     db.exec("ALTER TABLE resources ADD COLUMN key_points TEXT;");
+  }
+  if (!has("extract_truncated")) {
+    db.exec("ALTER TABLE resources ADD COLUMN extract_truncated TEXT;");
+  }
+  if (!has("extract_pages")) {
+    db.exec("ALTER TABLE resources ADD COLUMN extract_pages INTEGER;");
+  }
+  if (!has("extract_page_total")) {
+    db.exec("ALTER TABLE resources ADD COLUMN extract_page_total INTEGER;");
   }
   allowSharedOriginals(db);
   const version = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
     | { value: string }
     | undefined;
   if (!version) {
-    db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '3')").run();
-  } else if (Number(version.value) < 3) {
-    db.prepare("UPDATE meta SET value = '3' WHERE key = 'schema_version'").run();
+    db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '4')").run();
+  } else if (Number(version.value) < 4) {
+    db.prepare("UPDATE meta SET value = '4' WHERE key = 'schema_version'").run();
   }
   return db;
 }

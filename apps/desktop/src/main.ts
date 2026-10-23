@@ -8,13 +8,14 @@ import { importFolder } from "./library/importer";
 import { importLegacyExport } from "./library/legacy";
 import { runLibraryRegression } from "./library/regress";
 import {
-  jobsSummary,
+  jobsState,
   onJobsChanged,
   recoverInterruptedJobs,
   retryExtraction,
   retryFailedExtractions,
   runExtractionQueue,
 } from "./library/jobs";
+import { extractWorkerPid, shutdownExtraction } from "./extract-runner";
 import {
   createCollection,
   facets,
@@ -108,11 +109,20 @@ if (!app.requestSingleInstanceLock()) {
         });
         console.log("IMPORT_RESULT " + JSON.stringify(result));
       }
+      if (shot && process.argv.includes("--shot-extracting")) {
+        const running = runExtractionQueue();
+        const live = await waitForExtractionProgress(15000);
+        console.log("EXTRACT_LIVE " + JSON.stringify({ ...live, responsiveness: await measureResponsiveness() }));
+        void running;
+        await runWorkbenchShot(shot.slice("--shot=".length));
+        return;
+      }
       await runExtractionQueue();
-      console.log("EXTRACT_JOBS " + JSON.stringify(jobsSummary()));
+      console.log("EXTRACT_JOBS " + JSON.stringify(jobsState()));
       if (shot) {
         await runWorkbenchShot(shot.slice("--shot=".length));
       } else {
+        shutdownExtraction();
         app.exit(0);
       }
       return;
@@ -126,6 +136,10 @@ if (!app.requestSingleInstanceLock()) {
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
+  });
+
+  app.on("before-quit", () => {
+    shutdownExtraction();
   });
 
   app.on("window-all-closed", () => {
@@ -406,6 +420,23 @@ function shotActionScript(action: string): string {
       return "read";
     })()`;
   }
+  if (action === "info") {
+    return `(() => {
+      ${pick}
+      if (!item) return "no-item";
+      ${fire}
+      fire("click");
+      fire("dblclick");
+      return new Promise((resolve) => setTimeout(() => {
+        const button = [...document.querySelectorAll(".reader-actions button")].find(
+          (node) => node.textContent && node.textContent.includes("资料信息"),
+        );
+        if (!button) return resolve("no-reader");
+        button.click();
+        resolve("info");
+      }, 900));
+    })()`;
+  }
   return `(() => {
     ${pick}
     if (!item) return "no-item";
@@ -499,23 +530,61 @@ ipcMain.handle("library:import", async () => {
   return summary;
 });
 
-ipcMain.handle("library:jobs", () => jobsSummary());
+ipcMain.handle("library:jobs", () => jobsState());
 
 ipcMain.handle("library:retry", (_event, id: string) => {
   const queued = retryExtraction(id);
   if (queued > 0) void runExtractionQueue();
-  return { queued, jobs: jobsSummary() };
+  return { queued, jobs: jobsState() };
 });
 
 ipcMain.handle("library:retry-all", () => {
   const queued = retryFailedExtractions();
   if (queued > 0) void runExtractionQueue();
-  return { queued, jobs: jobsSummary() };
+  return { queued, jobs: jobsState() };
 });
 
 function broadcastJobs(): void {
-  const summary = jobsSummary();
+  const state = jobsState();
   for (const target of BrowserWindow.getAllWindows()) {
-    target.webContents.send("library:jobs-changed", summary);
+    target.webContents.send("library:jobs-changed", state);
   }
+}
+
+/** 等待工作进程回报第一页进度；用于真实桌面响应性验收。 */
+async function waitForExtractionProgress(timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = jobsState();
+    if (state.current) return { current: state.current, workerPid: extractWorkerPid() };
+    if (state.pending === 0 && state.running === 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return { current: jobsState().current, workerPid: extractWorkerPid() };
+}
+
+/**
+ * 抽取进行中测量主进程是否仍能及时响应：
+ * 定时器抖动反映事件循环拥塞，资料查询反映数据库与界面请求是否可用。
+ */
+async function measureResponsiveness() {
+  const delays: number[] = [];
+  for (let index = 0; index < 10; index += 1) {
+    const started = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    delays.push(Date.now() - started - 20);
+  }
+  const listStarted = Date.now();
+  const page = listResources({ view: "all", limit: 50 });
+  const listMs = Date.now() - listStarted;
+  const detailStarted = Date.now();
+  if (page.items[0]) getResource(page.items[0].id);
+  const detailMs = Date.now() - detailStarted;
+  return {
+    timerMaxLagMs: Math.max(...delays),
+    timerAvgLagMs: Math.round(delays.reduce((sum, value) => sum + value, 0) / delays.length),
+    listMs,
+    detailMs,
+    listed: page.total,
+  };
 }

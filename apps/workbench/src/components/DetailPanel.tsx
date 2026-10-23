@@ -23,19 +23,45 @@ interface DetailPanelProps {
   onRetryExtraction: () => void;
 }
 
-/** 正文抽取状态的文案：原件仍在，失败时可原地重试。 */
-function extractionState(detail: ResourceDetail): { text: string; failed: boolean; canRetry: boolean } {
+/**
+ * 正文抽取状态的文案：原件仍在，失败时可原地重试。
+ * 截断的正文必须显式说明范围，不能当作完整抽取展示。
+ */
+function extractionState(detail: ResourceDetail): {
+  text: string;
+  failed: boolean;
+  canRetry: boolean;
+  truncated: boolean;
+} {
   const job = detail.job;
   if (detail.extracted && detail.extracted.trim()) {
-    return { text: `正文已抽取，共 ${detail.extracted.length.toLocaleString()} 字。`, failed: false, canRetry: false };
+    const chars = `共 ${detail.extracted.length.toLocaleString()} 字`;
+    if (detail.extractTruncated === "chars") {
+      return {
+        text: `正文已截断：只保留前面 ${detail.extracted.length.toLocaleString()} 字，超出的部分没有写入，检索范围仅限已抽取内容。`,
+        failed: false,
+        canRetry: false,
+        truncated: true,
+      };
+    }
+    if (detail.extractTruncated === "pages") {
+      return {
+        text: `正文已截断：只抽取了前 ${detail.extractPages ?? 0} 页，全文共 ${detail.extractPageTotal ?? 0} 页，其余页面不在检索范围内。`,
+        failed: false,
+        canRetry: false,
+        truncated: true,
+      };
+    }
+    const pages = detail.kind === "pdf" && detail.extractPageTotal ? `，共 ${detail.extractPageTotal} 页` : "";
+    return { text: `正文已抽取，${chars}${pages}。`, failed: false, canRetry: false, truncated: false };
   }
   if (job?.status === "failed" || detail.status === "failed") {
-    return { text: `抽取失败：${job?.error ?? "未知原因"}`, failed: true, canRetry: true };
+    return { text: `抽取失败：${job?.error ?? "未知原因"}`, failed: true, canRetry: true, truncated: false };
   }
   if (job?.status === "running" || detail.status === "processing") {
-    return { text: "正在后台抽取正文…", failed: false, canRetry: false };
+    return { text: "正在后台抽取正文…", failed: false, canRetry: false, truncated: false };
   }
-  return { text: "已加入抽取队列，完成后可参与正文检索。", failed: false, canRetry: false };
+  return { text: "已加入抽取队列，完成后可参与正文检索。", failed: false, canRetry: false, truncated: false };
 }
 
 export function DetailPanel(props: DetailPanelProps) {
@@ -198,7 +224,13 @@ export function DetailPanel(props: DetailPanelProps) {
                 </button>
               )}
             </p>
-            <p className={`block-placeholder${extraction.failed ? " is-failed" : ""}`}>{extraction.text}</p>
+            <p
+              className={`block-placeholder${extraction.failed ? " is-failed" : ""}${
+                extraction.truncated ? " is-truncated" : ""
+              }`}
+            >
+              {extraction.text}
+            </p>
           </section>
         )}
 

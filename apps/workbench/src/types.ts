@@ -55,18 +55,32 @@ export interface ExtractionJob {
   updatedAt: string;
 }
 
+/** 工作进程正在抽取的资料与页码进度；没有任务在执行时为空。 */
+export interface JobsProgress {
+  resourceId: string;
+  title: string;
+  pages: number;
+  pageTotal: number;
+}
+
 export interface JobsSummary {
   pending: number;
   running: number;
   failed: number;
   done: number;
   total: number;
+  current?: JobsProgress | null;
 }
+
+export type ExtractTruncation = "chars" | "pages";
 
 export interface ResourceDetail extends ResourceItem {
   note: string | null;
   summary: string | null;
   extracted: string | null;
+  extractTruncated: ExtractTruncation | null;
+  extractPages: number | null;
+  extractPageTotal: number | null;
   files: ResourceFile[];
   collections: { id: string; name: string }[];
   tagDetails: { id: string; name: string; origin: string }[];
